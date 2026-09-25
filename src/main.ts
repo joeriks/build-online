@@ -10,6 +10,10 @@ import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
 
 // ---------------------------------------------------------------- state
 
+/** Bygget för claude.ai-artefakter: där fungerar inte nedladdning, utskrift eller externa API-anrop. */
+const ARTIFACT = import.meta.env.VITE_ARTIFACT === "1";
+if (ARTIFACT) document.querySelectorAll<HTMLElement>('[data-act="export"], [data-act="screenshot"], [data-act="print"]').forEach((b) => b.remove());
+
 const KEY = "bygglabbet:v1";
 const PROJECTS = "bygglabbet:projects";
 
@@ -275,9 +279,9 @@ function renderBuild() {
     <textarea id="prompt" placeholder="t.ex. Bygg ett hyllsystem mot en vägg som är 2,5 meter bred och 3 meter hög">${esc(promptVal)}</textarea>
     <div class="actions">
       <button id="go" class="btn primary">Bygg</button>
-      <button id="ai-go" class="btn" ${aiBusy ? "disabled" : ""}>${aiBusy ? `<span class="spinner"></span> <span id="ai-progress">Tänker…</span>` : "✨ Bygg/ändra med AI"}</button>
+      <button id="ai-go" class="btn" ${aiBusy || ARTIFACT ? "disabled" : ""}>${aiBusy ? `<span class="spinner"></span> <span id="ai-progress">Tänker…</span>` : "✨ Bygg/ändra med AI"}</button>
     </div>
-    ${state.design.parts.length ? `<label class="switch small muted" style="margin-top:8px"><input type="checkbox" id="ai-base" checked /> AI utgår från nuvarande konstruktion</label>` : ""}
+    ${state.design.parts.length && !ARTIFACT ? `<label class="switch small muted" style="margin-top:8px"><input type="checkbox" id="ai-base" checked /> AI utgår från nuvarande konstruktion</label>` : ""}
     ${interp}
     ${aiReply ? `<div class="ai-reply">${esc(aiReply)}</div>` : ""}
     ${d.edited && t ? `<div class="interp">Konstruktionen är ändrad för hand. <button class="btn small" id="regen">Generera om från mallen</button></div>` : ""}
@@ -290,13 +294,13 @@ function renderBuild() {
     ${t ? `<h3>Mått & inställningar – ${esc(t.name)}</h3><div id="params">${t.params.map((p) => paramHtml(p, d.params[p.key])).join("")}</div>` : ""}
 
     <h3>AI</h3>
-    <details class="card" id="ai-settings" ${!state.ai.apiKey ? "" : ""}>
+    ${ARTIFACT ? `<p class="small muted">AI-läget fungerar i den fristående versionen av appen (kör <code>npm run dev</code> eller GitHub Pages) – här kan du använda mallarna och fri redigering.</p>` : `<details class="card" id="ai-settings" ${!state.ai.apiKey ? "" : ""}>
       <summary>AI-inställningar ${state.ai.apiKey ? "✓" : ""}</summary>
       <p class="small muted">Med en egen Anthropic API-nyckel kan Claude rita helt fria konstruktioner ("bygg en fågelholk", "gör hyllan 20 cm djupare och lägg till en lucka") utifrån dina material och verktyg. Nyckeln används bara direkt från din webbläsare.</p>
       <label class="field"><span>API-nyckel</span><input type="password" id="ai-key" value="${esc(state.ai.apiKey)}" placeholder="sk-ant-…" autocomplete="off" /></label>
       <label class="field"><span>Modell</span><select id="ai-model">${AI_MODELS.map((m) => `<option value="${m.id}" ${m.id === state.ai.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
       <label class="switch small"><input type="checkbox" id="ai-remember" ${state.ai.remember ? "checked" : ""}/> Kom ihåg nyckeln i den här webbläsaren</label>
-    </details>`;
+    </details>`}`;
 }
 
 function paramHtml(p: Template["params"][number], v: number | boolean | undefined) {
@@ -454,7 +458,11 @@ matEl.addEventListener("click", (e) => {
   } else if (b.dataset.del) {
     const id = b.dataset.del;
     if (id === "__new") return void ((editingMat = null), renderMaterials());
-    if (state.design.parts.some((p) => p.materialId === id) && !confirm("Materialet används i konstruktionen. Ta bort ändå?")) return;
+    if (state.design.parts.some((p) => p.materialId === id) && b.dataset.confirm !== "1") {
+      b.dataset.confirm = "1";
+      b.textContent = "Används – klicka igen för att ta bort";
+      return;
+    }
     editingMat = null;
     commit(() => {
       state.ws.materials = state.ws.materials.filter((m) => m.id !== id);
