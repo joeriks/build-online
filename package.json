@@ -1,0 +1,34 @@
+{
+  "name": "bygglabbet",
+  "version": "1.0.0",
+  "description": "Experimentera visuellt med att bygga saker i trä utifrån material och verktyg du har",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:single": "SINGLE=1 vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joeriks/build-online.git"
+  },
+  "bugs": {
+    "url": "https://github.com/joeriks/build-online/issues"
+  },
+  "homepage": "https://github.com/joeriks/build-online#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "three": "^0.186.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^5.0.2"
+  },
+  "type": "module",
+  "private": true
+}

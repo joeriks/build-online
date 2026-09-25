@@ -1,0 +1,1065 @@
+import "./style.css";
+import type { Design, Material, Part, Workshop } from "./types";
+import { defaultMaterials, defaultTools, defaultWorkshop } from "./defaults";
+import { TEMPLATES, emptyDesign, templateById, type Template } from "./generators";
+import { newId } from "./generators/builder";
+import { parsePrompt, paramsFromParsed, type Parsed } from "./parse";
+import { bounds, checkDesign, cutList, partShape, purchases, type Warning } from "./analysis";
+import { Viewer } from "./viewer";
+import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
+
+// ---------------------------------------------------------------- state
+
+const KEY = "bygglabbet:v1";
+const PROJECTS = "bygglabbet:projects";
+
+interface State {
+  ws: Workshop;
+  design: Design;
+  customTitle: boolean;
+  ai: AiSettings & { remember: boolean };
+  theme: "auto" | "light" | "dark";
+}
+
+function safeGet<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function safeSet(key: string, v: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(v));
+  } catch {
+    /* privat läge m.m. */
+  }
+}
+
+function initialState(): State {
+  const saved = safeGet<Partial<State> | null>(KEY, null);
+  const shelfT = TEMPLATES[0];
+  const ws = saved?.ws ?? defaultWorkshop();
+  const design = saved?.design ?? shelfT.build(ws, paramsFromParsed(shelfT, parsePrompt(shelfT.example)), shelfT.example);
+  return {
+    ws,
+    design,
+    customTitle: saved?.customTitle ?? false,
+    ai: { apiKey: "", model: AI_MODELS[0].id, remember: false, ...(saved?.ai ?? {}) },
+    theme: saved?.theme ?? "auto",
+  };
+}
+
+const state = initialState();
+if (!state.design.prompt) state.design.prompt = "";
+let selected: string | null = null;
+let moveMode = false;
+let stepIdx = -1;
+let lastParsed: Parsed | null = null;
+let aiBusy = false;
+let aiReply = "";
+const undoStack: string[] = [];
+const redoStack: string[] = [];
+
+function persist() {
+  const ai = state.ai.remember ? state.ai : { ...state.ai, apiKey: "" };
+  safeSet(KEY, { ...state, ai });
+}
+
+const snapshot = () => JSON.stringify({ ws: state.ws, design: state.design });
+
+/** Gör en ändring som kan ångras. */
+function commit(fn: () => void, opts: { fit?: boolean; keepBuild?: boolean } = {}) {
+  undoStack.push(snapshot());
+  if (undoStack.length > 80) undoStack.shift();
+  redoStack.length = 0;
+  fn();
+  afterChange(opts);
+}
+
+function afterChange(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
+  if (selected && !state.design.parts.some((p) => p.id === selected)) selected = null;
+  if (stepIdx >= state.design.steps.length) stepIdx = -1;
+  persist();
+  renderAll(opts);
+}
+
+function restore(snap: string) {
+  const s = JSON.parse(snap);
+  state.ws = s.ws;
+  state.design = s.design;
+  afterChange();
+}
+function undo() {
+  const s = undoStack.pop();
+  if (!s) return;
+  redoStack.push(snapshot());
+  restore(s);
+}
+function redo() {
+  const s = redoStack.pop();
+  if (!s) return;
+  undoStack.push(snapshot());
+  restore(s);
+}
+
+// ---------------------------------------------------------------- helpers
+
+const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector(sel) as T;
+const esc = (s: unknown) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+const fmt = (n: number) => Math.round(n).toLocaleString("sv-SE");
+const kr = (n: number) => `${Math.round(n).toLocaleString("sv-SE")} kr`;
+const matOf = (id: string) => state.ws.materials.find((m) => m.id === id);
+const body = (name: string) => $(`[data-body="${name}"]`);
+
+function toast(msg: string, ms = 3200) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout((t as unknown as { _t: number })._t);
+  (t as unknown as { _t: number })._t = window.setTimeout(() => (t.hidden = true), ms);
+}
+
+function download(name: string, data: string, type: string) {
+  const a = document.createElement("a");
+  a.href = data.startsWith("data:") ? data : URL.createObjectURL(new Blob([data], { type }));
+  a.download = name;
+  a.click();
+}
+
+function slug(s: string) {
+  return s.toLowerCase().replace(/[åä]/g, "a").replace(/ö/g, "o").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "projekt";
+}
+
+// ---------------------------------------------------------------- generering
+
+function regenerate(t: Template, params: Design["params"], prompt: string) {
+  const title = state.customTitle ? state.design.title : null;
+  const d = t.build(state.ws, params, prompt);
+  if (title) d.title = title;
+  state.design = d;
+  stepIdx = -1;
+}
+
+/** När material/verktyg ändras: bygg om mallen så den anpassas. */
+function adaptToWorkshop() {
+  const t = templateById(state.design.templateId);
+  if (t && !state.design.edited) regenerate(t, state.design.params, state.design.prompt);
+}
+
+function runPrompt() {
+  const text = ($("#prompt") as HTMLTextAreaElement).value.trim();
+  if (!text) return toast("Skriv vad du vill bygga först.");
+  const parsed = parsePrompt(text);
+  lastParsed = parsed;
+  if (!parsed.template) {
+    if (state.ai.apiKey) return runAi(text);
+    renderBuild();
+    return toast("Hittade ingen passande mall. Välj en mall nedan – eller lägg in en API-nyckel så kan AI:n rita vad som helst.", 6000);
+  }
+  const params = paramsFromParsed(parsed.template, parsed);
+  state.customTitle = false;
+  aiReply = "";
+  commit(() => regenerate(parsed.template!, params, text), { fit: true });
+}
+
+async function runAi(text?: string) {
+  const request = text ?? ($("#prompt") as HTMLTextAreaElement).value.trim();
+  if (!request) return toast("Skriv vad du vill bygga eller ändra först.");
+  if (!state.ai.apiKey) {
+    ($("#ai-settings") as HTMLDetailsElement).open = true;
+    return toast("Lägg in din Anthropic API-nyckel under AI-inställningar.");
+  }
+  const base = ($("#ai-base") as HTMLInputElement | null)?.checked && state.design.parts.length ? state.design : null;
+  aiBusy = true;
+  aiReply = "";
+  renderBuild();
+  try {
+    const { design, reply } = await aiDesign(state.ai, state.ws, request, base, (n) => {
+      const el = $("#ai-progress");
+      if (el) el.textContent = `Ritar… (${fmt(n)} tecken)`;
+    });
+    aiReply = reply;
+    state.customTitle = false;
+    commit(() => {
+      state.design = { ...design, edited: true };
+      stepIdx = -1;
+    }, { fit: true });
+  } catch (e) {
+    toast(aiErrorMessage(e), 7000);
+  } finally {
+    aiBusy = false;
+    renderBuild();
+  }
+}
+
+// ---------------------------------------------------------------- viewer
+
+const viewer = new Viewer($("#viewport"), {
+  onSelect: (id) => select(id),
+  onMove: (id, pos) =>
+    commit(() => {
+      const p = state.design.parts.find((x) => x.id === id);
+      if (p) p.pos = pos;
+      state.design.edited = true;
+    }),
+  onHover: (part, x, y) => {
+    const tip = $("#tooltip");
+    if (!part) return void (tip.hidden = true);
+    const m = matOf(part.materialId);
+    const s = m ? partShape(part, m) : null;
+    tip.textContent = `${part.name} · ${m?.name ?? "?"}${s ? ` · ${fmt(s.length)} mm` : ""}`;
+    tip.style.left = `${x}px`;
+    tip.style.top = `${y}px`;
+    tip.hidden = false;
+  },
+});
+
+function select(id: string | null, scroll = true) {
+  selected = id;
+  viewer.select(id, moveMode);
+  viewer.setHighlight([]);
+  renderParts();
+  if (id && scroll) switchTab("right", "parts");
+}
+
+function applySteps() {
+  const steps = state.design.steps;
+  if (stepIdx < 0 || !steps.length) {
+    viewer.setSteps(null, null);
+  } else {
+    const referenced = new Set(steps.flatMap((s) => s.groups));
+    const visible = new Set(steps.slice(0, stepIdx + 1).flatMap((s) => s.groups));
+    for (const p of state.design.parts) if (!referenced.has(p.group)) visible.add(p.group);
+    viewer.setSteps(visible, new Set(steps[stepIdx].groups));
+  }
+  renderStepbar();
+}
+
+// ---------------------------------------------------------------- tabs
+
+function switchTab(side: "left" | "right", tab: string) {
+  const nav = $(`[data-tabs="${side}"]`);
+  nav.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  const panel = nav.parentElement!;
+  panel.querySelectorAll<HTMLElement>(".tab-body").forEach((b) => (b.hidden = b.dataset.body !== tab));
+}
+document.querySelectorAll<HTMLElement>("[data-tabs]").forEach((nav) =>
+  nav.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest("button");
+    if (b?.dataset.tab) switchTab(nav.dataset.tabs as "left" | "right", b.dataset.tab);
+  }),
+);
+
+// ---------------------------------------------------------------- render: Bygg
+
+function renderBuild() {
+  const d = state.design;
+  const t = templateById(d.templateId);
+  const el = body("build");
+  const promptVal = ($("#prompt") as HTMLTextAreaElement | null)?.value ?? d.prompt;
+  let interp = "";
+  if (lastParsed) {
+    const bits: string[] = [];
+    if (lastParsed.template) bits.push(`<strong>${esc(lastParsed.template.name)}</strong>`);
+    const names: Record<string, string> = { width: "bredd", height: "höjd", depth: "djup", length: "längd" };
+    for (const [k, v] of Object.entries(lastParsed.dims)) bits.push(`${names[k]} ${fmt(v!)} mm`);
+    if (lastParsed.count != null && lastParsed.template?.params.some((p) => ["shelves", "drawers"].includes(p.key))) bits.push(`antal ${lastParsed.count}`);
+    if (lastParsed.againstWall != null) bits.push(lastParsed.againstWall ? "mot vägg" : "fristående");
+    if (lastParsed.door != null) bits.push(lastParsed.door ? "med dörr" : "utan dörr");
+    interp = `<div class="interp">Tolkat: ${bits.join(" · ") || "<em>inget känt</em>"}</div>`;
+  }
+  el.innerHTML = `
+    <h3>Vad vill du bygga?</h3>
+    <textarea id="prompt" placeholder="t.ex. Bygg ett hyllsystem mot en vägg som är 2,5 meter bred och 3 meter hög">${esc(promptVal)}</textarea>
+    <div class="actions">
+      <button id="go" class="btn primary">Bygg</button>
+      <button id="ai-go" class="btn" ${aiBusy ? "disabled" : ""}>${aiBusy ? `<span class="spinner"></span> <span id="ai-progress">Tänker…</span>` : "✨ Bygg/ändra med AI"}</button>
+    </div>
+    ${state.design.parts.length ? `<label class="switch small muted" style="margin-top:8px"><input type="checkbox" id="ai-base" checked /> AI utgår från nuvarande konstruktion</label>` : ""}
+    ${interp}
+    ${aiReply ? `<div class="ai-reply">${esc(aiReply)}</div>` : ""}
+    ${d.edited && t ? `<div class="interp">Konstruktionen är ändrad för hand. <button class="btn small" id="regen">Generera om från mallen</button></div>` : ""}
+
+    <h3>Mallar</h3>
+    <div class="templates">
+      ${TEMPLATES.map((x) => `<button class="tpl ${x.id === d.templateId ? "active" : ""}" data-tpl="${x.id}" title="${esc(x.example)}"><span class="ico">${x.icon}</span>${esc(x.name)}</button>`).join("")}
+    </div>
+
+    ${t ? `<h3>Mått & inställningar – ${esc(t.name)}</h3><div id="params">${t.params.map((p) => paramHtml(p, d.params[p.key])).join("")}</div>` : ""}
+
+    <h3>AI</h3>
+    <details class="card" id="ai-settings" ${!state.ai.apiKey ? "" : ""}>
+      <summary>AI-inställningar ${state.ai.apiKey ? "✓" : ""}</summary>
+      <p class="small muted">Med en egen Anthropic API-nyckel kan Claude rita helt fria konstruktioner ("bygg en fågelholk", "gör hyllan 20 cm djupare och lägg till en lucka") utifrån dina material och verktyg. Nyckeln används bara direkt från din webbläsare.</p>
+      <label class="field"><span>API-nyckel</span><input type="password" id="ai-key" value="${esc(state.ai.apiKey)}" placeholder="sk-ant-…" autocomplete="off" /></label>
+      <label class="field"><span>Modell</span><select id="ai-model">${AI_MODELS.map((m) => `<option value="${m.id}" ${m.id === state.ai.model ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
+      <label class="switch small"><input type="checkbox" id="ai-remember" ${state.ai.remember ? "checked" : ""}/> Kom ihåg nyckeln i den här webbläsaren</label>
+    </details>`;
+}
+
+function paramHtml(p: Template["params"][number], v: number | boolean | undefined) {
+  if (p.type === "bool")
+    return `<label class="switch"><input type="checkbox" data-param="${p.key}" ${v ? "checked" : ""}/> ${esc(p.label)}</label>`;
+  const val = Number(v ?? p.default);
+  return `<div class="param"><div class="head"><span>${esc(p.label)}</span><span><input type="number" data-param="${p.key}" data-num value="${val}" min="${p.min}" max="${p.max}" step="${p.step}"/> <span class="muted small">${p.unit ?? "st"}</span></span></div>
+    <input type="range" data-param="${p.key}" value="${val}" min="${p.min}" max="${p.max}" step="${p.step}"/></div>`;
+}
+
+const buildEl = body("build");
+buildEl.addEventListener("click", (e) => {
+  const tgt = e.target as HTMLElement;
+  if (tgt.closest("#go")) runPrompt();
+  else if (tgt.closest("#ai-go")) runAi();
+  else if (tgt.closest("#regen")) {
+    const t = templateById(state.design.templateId)!;
+    commit(() => regenerate(t, state.design.params, state.design.prompt), { fit: true });
+  } else {
+    const tpl = tgt.closest<HTMLElement>("[data-tpl]");
+    if (tpl) {
+      const t = templateById(tpl.dataset.tpl!)!;
+      ($("#prompt") as HTMLTextAreaElement).value = t.example;
+      lastParsed = parsePrompt(t.example);
+      state.customTitle = false;
+      aiReply = "";
+      commit(() => regenerate(t, paramsFromParsed(t, lastParsed!), t.example), { fit: true });
+    }
+  }
+});
+buildEl.addEventListener("keydown", (e) => {
+  if ((e.target as HTMLElement).id === "prompt" && e.key === "Enter" && (e.ctrlKey || e.metaKey)) runPrompt();
+});
+
+let paramTimer = 0;
+buildEl.addEventListener("input", (e) => {
+  const tgt = e.target as HTMLInputElement;
+  if (tgt.id === "ai-key") {
+    state.ai.apiKey = tgt.value.trim();
+    return persist();
+  }
+  const key = tgt.dataset.param;
+  if (!key) return;
+  const t = templateById(state.design.templateId);
+  if (!t) return;
+  const v = tgt.type === "checkbox" ? tgt.checked : Number(tgt.value);
+  if (tgt.type !== "checkbox") buildEl.querySelectorAll<HTMLInputElement>(`[data-param="${key}"]`).forEach((i) => i !== tgt && (i.value = String(v)));
+  if (tgt.type === "number" && (Number.isNaN(v) || tgt.value === "")) return;
+  // Slider: uppdatera direkt men spara ångra-steg först när användaren släpper
+  clearTimeout(paramTimer);
+  const params = { ...state.design.params, [key]: v };
+  const apply = () => regenerate(t, params, state.design.prompt);
+  if (tgt.type === "range") {
+    apply();
+    renderAll({ keepBuild: true });
+    paramTimer = window.setTimeout(() => {
+      undoStack.push(snapshot());
+      persist();
+    }, 400);
+  } else commit(apply, { keepBuild: true });
+});
+buildEl.addEventListener("change", (e) => {
+  const tgt = e.target as HTMLInputElement | HTMLSelectElement;
+  if (tgt.id === "ai-model") state.ai.model = tgt.value;
+  if (tgt.id === "ai-remember") state.ai.remember = (tgt as HTMLInputElement).checked;
+  persist();
+});
+
+// ---------------------------------------------------------------- render: Material
+
+let editingMat: string | null = null;
+
+function matMeta(m: Material) {
+  if (m.kind === "linear") return `${m.a}×${m.b} mm · ${m.stockLength / 1000} m${m.price != null ? ` · ${m.price} kr/st` : ""}`;
+  if (m.kind === "sheet") return `${m.a} mm · skiva ${m.stockLength}×${m.stockWidth}${m.price != null ? ` · ${m.price} kr` : ""}`;
+  return `nät · rulle ${m.stockWidth / 1000}×${m.stockLength / 1000} m${m.price != null ? ` · ${m.price} kr` : ""}`;
+}
+
+function matForm(m: Material) {
+  const lin = m.kind === "linear";
+  return `<div class="edit-box" data-form="${m.id}">
+    <label class="field"><span>Namn</span><input type="text" name="name" value="${esc(m.name)}"/></label>
+    <div class="grid2">
+      <label>Typ<select name="kind"><option value="linear" ${lin ? "selected" : ""}>Virke (regel, bräda, läkt)</option><option value="sheet" ${m.kind === "sheet" ? "selected" : ""}>Skiva</option><option value="mesh" ${m.kind === "mesh" ? "selected" : ""}>Nät</option></select></label>
+      <label>Färg<input type="color" name="color" value="${m.color}" style="height:34px;padding:2px"/></label>
+    </div>
+    <div class="grid3" style="margin-top:6px">
+      <label>${lin ? "Tjocklek" : "Tjocklek"} (mm)<input type="number" name="a" value="${m.a}"/></label>
+      <label>${lin ? "Bredd (mm)" : "Bredd (mm)"}<input type="number" name="${lin ? "b" : "stockWidth"}" value="${lin ? m.b : m.stockWidth}"/></label>
+      <label>Längd (mm)<input type="number" name="stockLength" value="${m.stockLength}"/></label>
+    </div>
+    <div class="grid2" style="margin-top:6px"><label>Pris (kr/st)<input type="number" name="price" value="${m.price ?? ""}"/></label></div>
+    <div class="actions"><button class="btn primary small" data-save="${m.id}">Spara</button><button class="btn small" data-cancel>Avbryt</button><button class="btn small danger" data-del="${m.id}" style="margin-left:auto">Ta bort</button></div>
+  </div>`;
+}
+
+function renderMaterials() {
+  const el = body("materials");
+  const used = new Set(state.design.parts.map((p) => p.materialId));
+  const groups: [Material["kind"], string][] = [["linear", "Virke"], ["sheet", "Skivor"], ["mesh", "Nät"]];
+  el.innerHTML = `
+    <p class="small muted" style="margin-top:0">Bocka i det du har tillgång till. Mallarna anpassar sig automatiskt – finns bara reglar 45×45 byggs allt av dem.</p>
+    ${groups.map(([k, label]) => {
+      const list = state.ws.materials.filter((m) => m.kind === k);
+      if (!list.length) return "";
+      return `<h3>${label}</h3><div class="list">${list.map((m) => `
+        <div class="item ${m.available ? "" : "off"}">
+          <input type="checkbox" data-avail="${m.id}" ${m.available ? "checked" : ""} aria-label="Tillgänglig"/>
+          <span class="swatch" style="background:${m.color}"></span>
+          <div class="grow"><div class="name">${esc(m.name)} ${used.has(m.id) ? `<span class="tag">används</span>` : ""}</div><div class="meta">${esc(matMeta(m))}</div></div>
+          <button class="btn ghost small" data-edit="${m.id}" title="Ändra">✎</button>
+        </div>${editingMat === m.id ? matForm(m) : ""}`).join("")}</div>`;
+    }).join("")}
+    ${editingMat === "__new" ? matForm(newMaterialDraft) : ""}
+    <div class="actions">
+      <button class="btn" id="mat-add">+ Lägg till material</button>
+      <button class="btn ghost small" id="mat-reset">Återställ standard</button>
+    </div>
+    <h3>Snabbval</h3>
+    <div class="actions" style="margin-top:0">
+      <button class="btn small" data-preset="only4545">Bara reglar 45×45</button>
+      <button class="btn small" data-preset="all">Allt tillgängligt</button>
+    </div>`;
+}
+
+let newMaterialDraft: Material = {
+  id: "__new", name: "Nytt virke", kind: "linear", a: 45, b: 45, stockLength: 3000, stockWidth: 0, price: undefined, color: "#d8b27a", available: true,
+};
+
+const matEl = body("materials");
+matEl.addEventListener("change", (e) => {
+  const tgt = e.target as HTMLInputElement;
+  if (tgt.dataset.avail) {
+    commit(() => {
+      const m = matOf(tgt.dataset.avail!);
+      if (m) m.available = tgt.checked;
+      adaptToWorkshop();
+    });
+  }
+});
+matEl.addEventListener("click", (e) => {
+  const tgt = e.target as HTMLElement;
+  const b = tgt.closest<HTMLElement>("button");
+  if (!b) return;
+  if (b.dataset.edit) {
+    editingMat = editingMat === b.dataset.edit ? null : b.dataset.edit;
+    renderMaterials();
+  } else if (b.id === "mat-add") {
+    newMaterialDraft = { ...newMaterialDraft, id: "__new" };
+    editingMat = "__new";
+    renderMaterials();
+  } else if (b.hasAttribute("data-cancel")) {
+    editingMat = null;
+    renderMaterials();
+  } else if (b.dataset.del) {
+    const id = b.dataset.del;
+    if (id === "__new") return void ((editingMat = null), renderMaterials());
+    if (state.design.parts.some((p) => p.materialId === id) && !confirm("Materialet används i konstruktionen. Ta bort ändå?")) return;
+    editingMat = null;
+    commit(() => {
+      state.ws.materials = state.ws.materials.filter((m) => m.id !== id);
+      adaptToWorkshop();
+    });
+  } else if (b.dataset.save) {
+    const form = matEl.querySelector<HTMLElement>(`[data-form="${b.dataset.save}"]`)!;
+    const val = (n: string) => (form.querySelector(`[name="${n}"]`) as HTMLInputElement | null)?.value ?? "";
+    const kind = val("kind") as Material["kind"];
+    const a = Math.max(0.5, Number(val("a")) || 1);
+    const second = Number(val(kind === "linear" && form.querySelector('[name="b"]') ? "b" : "stockWidth")) || a;
+    const upd: Material = {
+      id: b.dataset.save === "__new" ? `m-${newId()}` : b.dataset.save,
+      name: val("name") || "Material",
+      kind,
+      a: kind === "linear" ? Math.min(a, second) : a,
+      b: kind === "linear" ? Math.max(a, second) : a,
+      stockLength: Math.max(1, Number(val("stockLength")) || 3000),
+      stockWidth: kind === "linear" ? 0 : second,
+      price: val("price") === "" ? undefined : Number(val("price")),
+      color: val("color") || "#d8b27a",
+      available: b.dataset.save === "__new" ? true : matOf(b.dataset.save)?.available ?? true,
+    };
+    editingMat = null;
+    commit(() => {
+      const i = state.ws.materials.findIndex((m) => m.id === upd.id);
+      if (i >= 0) state.ws.materials[i] = upd;
+      else state.ws.materials.push(upd);
+      adaptToWorkshop();
+    });
+  } else if (b.id === "mat-reset") {
+    commit(() => {
+      state.ws.materials = defaultMaterials();
+      adaptToWorkshop();
+    });
+  } else if (b.dataset.preset) {
+    const p = b.dataset.preset;
+    commit(() => {
+      state.ws.materials.forEach((m) => (m.available = p === "all" ? true : m.id === "regel-45x45" || m.kind === "mesh"));
+      adaptToWorkshop();
+    });
+  }
+});
+
+// ---------------------------------------------------------------- render: Verktyg
+
+function renderTools() {
+  const el = body("tools");
+  el.innerHTML = `
+    <p class="small muted" style="margin-top:0">Konstruktionen och byggtipsen anpassas efter dina verktyg – t.ex. hörnplåtar istället för 45°-snedstöd om du saknar kap- & gersåg, och ingen klyvning utan bordssåg.</p>
+    <div class="list">${state.ws.tools.map((t) => `
+      <label class="item ${t.available ? "" : "off"}">
+        <input type="checkbox" data-tool="${t.id}" ${t.available ? "checked" : ""}/>
+        <div class="grow">${esc(t.name)}</div>
+        ${t.custom ? `<button class="btn ghost small" data-tool-del="${t.id}" title="Ta bort">✕</button>` : ""}
+      </label>`).join("")}</div>
+    <div class="row" style="margin-top:10px"><input type="text" id="tool-new" placeholder="Annat verktyg, t.ex. överfräs"/><button class="btn" id="tool-add">Lägg till</button></div>
+    <h3>Inställningar</h3>
+    <label class="field"><span>Sågbladets bredd (sågspår), mm – används i kapoptimeringen</span><input type="number" id="kerf" value="${state.ws.kerf}" min="0" max="10" step="0.5"/></label>
+    <button class="btn ghost small" id="tools-reset">Återställ standardverktyg</button>`;
+}
+
+const toolEl = body("tools");
+toolEl.addEventListener("change", (e) => {
+  const tgt = e.target as HTMLInputElement;
+  if (tgt.dataset.tool)
+    commit(() => {
+      const t = state.ws.tools.find((x) => x.id === tgt.dataset.tool);
+      if (t) t.available = tgt.checked;
+      adaptToWorkshop();
+    });
+  if (tgt.id === "kerf") commit(() => (state.ws.kerf = Math.max(0, Number(tgt.value) || 0)));
+});
+toolEl.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("button");
+  if (!b) return;
+  if (b.id === "tool-add") {
+    const name = ($("#tool-new") as HTMLInputElement).value.trim();
+    if (!name) return;
+    commit(() => state.ws.tools.push({ id: `t-${newId()}`, name, available: true, custom: true }));
+  } else if (b.dataset.toolDel) {
+    e.preventDefault();
+    commit(() => (state.ws.tools = state.ws.tools.filter((t) => t.id !== b.dataset.toolDel)));
+  } else if (b.id === "tools-reset") {
+    commit(() => {
+      state.ws.tools = defaultTools();
+      adaptToWorkshop();
+    });
+  }
+});
+toolEl.addEventListener("keydown", (e) => {
+  if ((e.target as HTMLElement).id === "tool-new" && e.key === "Enter") $("#tool-add").click();
+});
+
+// ---------------------------------------------------------------- render: Översikt
+
+let warnings: Warning[] = [];
+
+function renderOverview() {
+  const d = state.design;
+  const el = body("overview");
+  const buy = purchases(d, state.ws);
+  const cost = buy.reduce((s, p) => s + (p.cost ?? 0), 0);
+  const lin = buy.filter((p) => p.material.kind === "linear").reduce((s, p) => s + (p.totalLength ?? 0), 0);
+  const b = bounds(d.parts);
+  const size = d.parts.length ? `${fmt(b.max.x - b.min.x)} × ${fmt(b.max.z - b.min.z)} × ${fmt(b.max.y - b.min.y)} mm` : "–";
+  el.innerHTML = `
+    <div class="stats">
+      <div class="stat"><div class="v">${d.parts.length}</div><div class="k">delar</div></div>
+      <div class="stat"><div class="v">${(lin / 1000).toFixed(1)} m</div><div class="k">virke</div></div>
+      <div class="stat"><div class="v">${cost ? kr(cost) : "–"}</div><div class="k">ca materialkostnad</div></div>
+    </div>
+    <div class="small muted">Yttermått (B × D × H): <span class="num">${size}</span></div>
+    ${warnings.length ? `<h3>Kontroll av material & verktyg</h3>${warnings.map((w, i) => `
+      <div class="warn-item ${w.level}" data-warn="${i}"><span>${w.level === "error" ? "⛔" : w.level === "warn" ? "⚠️" : "ℹ️"}</span><span>${esc(w.text)}</span>${w.partIds.length ? `<span class="cnt">${w.partIds.length} del${w.partIds.length > 1 ? "ar" : ""}</span>` : ""}</div>`).join("")}` : d.parts.length ? `<h3>Kontroll</h3><div class="warn-item info">✅ Allt kan byggas med dina material och verktyg.</div>` : ""}
+    ${d.notes.length ? `<h3>Att tänka på</h3><ul class="notes">${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+    ${d.hardware.length ? `<h3>Skruv & beslag (ca)</h3><table class="tbl">${d.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="r">${fmt(h.qty)} ${esc(h.unit)}</td></tr>`).join("")}</table>` : ""}`;
+}
+
+body("overview").addEventListener("click", (e) => {
+  const w = (e.target as HTMLElement).closest<HTMLElement>("[data-warn]");
+  if (!w) return;
+  const ids = warnings[+w.dataset.warn!]?.partIds ?? [];
+  if (ids.length) {
+    selected = null;
+    viewer.select(null, false);
+    viewer.setHighlight(ids);
+    toast(`Markerat ${ids.length} del${ids.length > 1 ? "ar" : ""} i 3D-vyn.`);
+  }
+});
+
+// ---------------------------------------------------------------- render: Delar
+
+function renderParts() {
+  const d = state.design;
+  const el = body("parts");
+  const p = d.parts.find((x) => x.id === selected);
+  const matOptions = (cur: string) =>
+    state.ws.materials.map((m) => `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${esc(m.name)}${m.available ? "" : " (ej tillg.)"}</option>`).join("");
+  const num = (name: string, v: number, label: string) => `<label>${label}<input type="number" name="${name}" value="${Math.round(v * 10) / 10}" step="1"/></label>`;
+  const editor = p ? `
+    <div class="card" data-part="${p.id}">
+      <label class="field"><span>Namn</span><input type="text" name="name" value="${esc(p.name)}"/></label>
+      <div class="grid2"><label>Material<select name="materialId">${matOptions(p.materialId)}</select></label><label>Grupp<input type="text" name="group" value="${esc(p.group)}"/></label></div>
+      <h3>Storlek (mm)</h3><div class="grid3">${num("dims.x", p.dims.x, "X (bredd)")}${num("dims.y", p.dims.y, "Y (höjd)")}${num("dims.z", p.dims.z, "Z (djup)")}</div>
+      <h3>Position – mittpunkt (mm)</h3><div class="grid3">${num("pos.x", p.pos.x, "X")}${num("pos.y", p.pos.y, "Y")}${num("pos.z", p.pos.z, "Z")}</div>
+      <h3>Rotation (°) & vinkelkap</h3><div class="grid3">${num("rot.x", p.rot.x, "Rot X")}${num("rot.y", p.rot.y, "Rot Y")}${num("rot.z", p.rot.z, "Rot Z")}</div>
+      <div class="grid2" style="margin-top:6px">${num("endCuts.0", p.endCuts[0], "Kapvinkel ände 1")}${num("endCuts.1", p.endCuts[1], "Kapvinkel ände 2")}</div>
+      <div class="actions">
+        <button class="btn small" data-pact="dup">Duplicera</button>
+        <button class="btn small" data-pact="rotate">Vrid 90°</button>
+        <button class="btn small ${moveMode ? "primary" : ""}" data-pact="move">✥ Flytta i 3D</button>
+        <button class="btn small danger" data-pact="del" style="margin-left:auto">Ta bort</button>
+      </div>
+      <p class="small muted" style="margin:8px 0 0">Tips: piltangenter flyttar 10 mm (Shift = 100 mm), PgUp/PgDn i höjd, Delete tar bort.</p>
+    </div>` : `<p class="small muted" style="margin-top:0">Klicka på en del i 3D-vyn eller i listan för att ändra den.</p>`;
+
+  const groups = new Map<string, Part[]>();
+  for (const x of d.parts) groups.set(x.group, [...(groups.get(x.group) ?? []), x]);
+  el.innerHTML = `${editor}
+    <div class="actions" style="margin:8px 0 4px"><button class="btn small" id="part-add">+ Ny del</button></div>
+    ${[...groups].map(([g, list]) => `<h3>${esc(g)} (${list.length})</h3><table class="tbl">${list.map((x) => {
+      const m = matOf(x.materialId);
+      const s = m ? partShape(x, m) : null;
+      return `<tr class="click ${x.id === selected ? "sel" : ""}" data-sel="${x.id}"><td>${esc(x.name)}<div class="small muted">${esc(m?.name ?? "?")}</div></td><td class="r small">${s ? (m!.kind === "linear" ? `${fmt(s.length)} mm` : `${fmt(s.length)}×${fmt(s.section[1])}`) : ""}</td></tr>`;
+    }).join("")}</table>`).join("")}`;
+}
+
+const partsEl = body("parts");
+partsEl.addEventListener("click", (e) => {
+  const tgt = e.target as HTMLElement;
+  const row = tgt.closest<HTMLElement>("[data-sel]");
+  if (row) return select(row.dataset.sel!, false);
+  const b = tgt.closest<HTMLElement>("button");
+  if (!b) return;
+  if (b.id === "part-add") return addPart();
+  const act = b.dataset.pact;
+  const p = state.design.parts.find((x) => x.id === selected);
+  if (!p) return;
+  if (act === "del") deleteSelected();
+  else if (act === "dup") {
+    const c: Part = JSON.parse(JSON.stringify(p));
+    c.id = newId();
+    c.name = `${p.name} (kopia)`;
+    c.pos.x += Math.max(50, p.dims.x + 20);
+    commit(() => {
+      state.design.parts.push(c);
+      state.design.edited = true;
+    });
+    select(c.id);
+  } else if (act === "rotate") {
+    commit(() => {
+      // vrid 90° runt Y genom att byta X och Z
+      [p.dims.x, p.dims.z] = [p.dims.z, p.dims.x];
+      state.design.edited = true;
+    });
+  } else if (act === "move") {
+    moveMode = !moveMode;
+    $("#v-move").classList.toggle("on", moveMode);
+    viewer.select(selected, moveMode);
+    renderParts();
+  }
+});
+partsEl.addEventListener("change", (e) => {
+  const tgt = e.target as HTMLInputElement;
+  const card = tgt.closest<HTMLElement>("[data-part]");
+  if (!card) return;
+  const p = state.design.parts.find((x) => x.id === card.dataset.part);
+  if (!p) return;
+  commit(() => {
+    const [a, k] = tgt.name.split(".");
+    if (k != null) {
+      const v = Number(tgt.value);
+      if (Number.isNaN(v)) return;
+      if (a === "endCuts") p.endCuts[+k as 0 | 1] = v;
+      else (p[a as "dims" | "pos" | "rot"] as unknown as Record<string, number>)[k] = a === "dims" ? Math.max(0.5, Math.abs(v)) : v;
+    } else if (tgt.name === "materialId") {
+      const m = matOf(tgt.value);
+      p.materialId = tgt.value;
+      // anpassa tvärsnittet till det nya virket
+      if (m?.kind === "linear") {
+        const ax = (["x", "y", "z"] as const).slice().sort((u, w) => p.dims[u] - p.dims[w]);
+        p.dims[ax[0]] = m.a;
+        p.dims[ax[1]] = m.b;
+      } else if (m) {
+        const ax = (["x", "y", "z"] as const).slice().sort((u, w) => p.dims[u] - p.dims[w]);
+        p.dims[ax[0]] = m.a;
+      }
+    } else (p as unknown as Record<string, string>)[tgt.name] = tgt.value;
+    state.design.edited = true;
+  });
+});
+
+function addPart() {
+  const m = state.ws.materials.find((x) => x.available && x.kind === "linear") ?? state.ws.materials[0];
+  if (!m) return toast("Lägg till ett material först.");
+  const b = bounds(state.design.parts);
+  const cx = state.design.parts.length ? (b.min.x + b.max.x) / 2 : 0;
+  const cz = state.design.parts.length ? b.max.z + 300 : 0;
+  const dims = m.kind === "linear" ? { x: 1000, y: m.b, z: m.a } : m.kind === "sheet" ? { x: 600, y: m.a, z: 400 } : { x: 1000, y: 1000, z: 1 };
+  const p: Part = { id: newId(), name: "Ny del", materialId: m.id, dims, pos: { x: cx, y: dims.y / 2, z: cz }, rot: { x: 0, y: 0, z: 0 }, endCuts: [0, 0], group: "egna delar" };
+  commit(() => {
+    state.design.parts.push(p);
+    state.design.edited = true;
+  });
+  moveMode = true;
+  $("#v-move").classList.add("on");
+  select(p.id);
+}
+
+function deleteSelected() {
+  if (!selected) return;
+  const id = selected;
+  selected = null;
+  commit(() => {
+    state.design.parts = state.design.parts.filter((x) => x.id !== id);
+    state.design.edited = true;
+  });
+}
+
+// ---------------------------------------------------------------- render: Kapning
+
+function barSvg(pieces: { length: number; name: string }[], stock: number, kerf: number, color: string) {
+  const W = 340, H = 22;
+  let x = 0;
+  const rects = pieces.map((p) => {
+    const w = (p.length / stock) * W;
+    const r = `<g><title>${esc(p.name)} – ${fmt(p.length)} mm</title><rect x="${x}" y="0" width="${Math.max(1, w - 0.6)}" height="${H}" rx="2" fill="${color}" stroke="rgba(0,0,0,.35)" stroke-width="0.6"/>${w > 34 ? `<text x="${x + w / 2}" y="${H / 2 + 4}" text-anchor="middle" font-size="10" fill="#3a2a14">${fmt(p.length)}</text>` : ""}</g>`;
+    x += w + (kerf / stock) * W;
+    return r;
+  }).join("");
+  return `<svg class="bar-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Kapschema"><rect width="${W}" height="${H}" rx="3" fill="none" stroke="var(--line)" stroke-dasharray="3 2"/>${rects}</svg>`;
+}
+
+function renderCuts() {
+  const rows = cutList(state.design, state.ws);
+  const el = body("cuts");
+  if (!rows.length) return void (el.innerHTML = `<p class="muted">Inga delar ännu.</p>`);
+  const byMat = new Map<string, typeof rows>();
+  for (const r of rows) byMat.set(r.materialName, [...(byMat.get(r.materialName) ?? []), r]);
+  el.innerHTML = [...byMat].map(([name, list]) => `
+    <h3>${esc(name)}</h3>
+    <table class="tbl">
+      <tr><th class="r">St</th><th class="r">${list[0].kind === "linear" ? "Längd" : "Mått"}</th><th>Bearbetning</th><th>Delar</th></tr>
+      ${list.map((r, i) => `<tr class="click" data-cut="${esc(name)}|${i}">
+        <td class="r"><strong>${r.qty}</strong></td>
+        <td class="r num">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td>
+        <td>${r.rip ? `<span class="tag rip">klyv ${r.section.join("×")}</span>` : ""}${r.endCuts.some((a) => a) ? `<span class="tag ang">${r.endCuts.filter((a) => a).map((a) => `${a}°`).join(" / ")}</span>` : ""}${!r.rip && !r.endCuts.some((a) => a) ? `<span class="tag">rakt</span>` : ""}</td>
+        <td class="small">${esc(r.names.slice(0, 3).join(", "))}${r.names.length > 3 ? ` +${r.names.length - 3}` : ""}</td></tr>`).join("")}
+    </table>`).join("") + `<p class="small muted">Klicka på en rad för att se delarna i 3D. Mått i mm.</p>`;
+  (el as HTMLElement & { _rows?: typeof byMat })._rows = byMat;
+}
+body("cuts").addEventListener("click", (e) => {
+  const r = (e.target as HTMLElement).closest<HTMLElement>("[data-cut]");
+  if (!r) return;
+  const [name, i] = r.dataset.cut!.split("|");
+  const rows = (body("cuts") as HTMLElement & { _rows?: Map<string, ReturnType<typeof cutList>> })._rows;
+  const row = rows?.get(name)?.[+i];
+  if (row) {
+    selected = null;
+    viewer.select(null, false);
+    viewer.setHighlight(row.partIds);
+  }
+});
+
+// ---------------------------------------------------------------- render: Inköp
+
+function renderBuy() {
+  const el = body("buy");
+  const buy = purchases(state.design, state.ws);
+  if (!buy.length) return void (el.innerHTML = `<p class="muted">Inga delar ännu.</p>`);
+  const total = buy.reduce((s, p) => s + (p.cost ?? 0), 0);
+  el.innerHTML = `
+    <table class="tbl">
+      <tr><th>Material</th><th class="r">Antal</th><th class="r">Kostnad</th></tr>
+      ${buy.map((p) => `<tr><td>${esc(p.material.name)}${p.material.available ? ` <span class="tag">har</span>` : ""}<div class="small muted">${esc(p.unitLabel)}</div></td><td class="r"><strong>${p.qty}</strong></td><td class="r">${p.cost != null ? kr(p.cost) : "–"}</td></tr>`).join("")}
+      ${state.design.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="r">${fmt(h.qty)} ${esc(h.unit)}</td><td></td></tr>`).join("")}
+      <tr><td><strong>Summa material</strong> <span class="small muted">(ungefärliga priser)</span></td><td></td><td class="r"><strong>${kr(total)}</strong></td></tr>
+    </table>
+    <div class="actions"><button class="btn small" id="copy-buy">Kopiera inköpslista</button></div>
+    ${buy.map((p) => {
+      if (p.bars?.length) {
+        const waste = p.bars.reduce((s, b) => s + b.waste, 0);
+        return `<h3>Kapschema – ${esc(p.material.name)}</h3><div class="small muted">${p.bars.length} × ${fmt(p.material.stockLength)} mm · spill ${fmt(waste)} mm</div><div class="bars">${p.bars.map((b) => barSvg(b.pieces, p.material.stockLength, state.ws.kerf, p.material.color)).join("")}</div>`;
+      }
+      if (p.sheets?.length) {
+        const L = p.material.stockLength, Wd = p.material.stockWidth;
+        return `<h3>Skivschema – ${esc(p.material.name)}</h3>${p.sheets.map((s, i) => `<div class="small muted">Skiva ${i + 1}</div>
+          <svg class="sheet-svg" viewBox="0 0 ${L} ${Wd}" role="img" aria-label="Skivschema"><rect width="${L}" height="${Wd}" fill="var(--panel-2)" stroke="var(--line)" stroke-width="8"/>
+          ${s.placed.map((r) => `<g><title>${esc(r.name)} – ${fmt(r.w)}×${fmt(r.h)}</title><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" fill="${p.material.color}" stroke="#6b4a1f" stroke-width="5"/>${r.w > 260 && r.h > 90 ? `<text x="${r.x + r.w / 2}" y="${r.y + r.h / 2 + 22}" text-anchor="middle" font-size="64" fill="#3a2a14">${fmt(r.w)}×${fmt(r.h)}</text>` : ""}</g>`).join("")}</svg>`).join("")}`;
+      }
+      return "";
+    }).join("")}`;
+}
+body("buy").addEventListener("click", (e) => {
+  if (!(e.target as HTMLElement).closest("#copy-buy")) return;
+  const buy = purchases(state.design, state.ws);
+  const lines = [
+    `Inköpslista – ${state.design.title}`,
+    ...buy.map((p) => `${p.qty} × ${p.material.name} (${p.unitLabel})`),
+    ...state.design.hardware.map((h) => `${h.qty} ${h.unit} ${h.name}`),
+  ];
+  navigator.clipboard?.writeText(lines.join("\n")).then(() => toast("Inköpslistan är kopierad."), () => toast("Kunde inte kopiera."));
+});
+
+// ---------------------------------------------------------------- render: Steg
+
+function renderSteps() {
+  const el = body("steps");
+  const steps = state.design.steps;
+  el.innerHTML = steps.length
+    ? `<p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
+      <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
+      <button class="btn small" data-step="-1">Visa allt</button>`
+    : `<p class="muted">Inga byggsteg.</p>`;
+}
+body("steps").addEventListener("click", (e) => {
+  const s = (e.target as HTMLElement).closest<HTMLElement>("[data-step]");
+  if (!s) return;
+  stepIdx = +s.dataset.step!;
+  applySteps();
+  renderSteps();
+});
+
+function renderStepbar() {
+  const bar = $("#stepbar");
+  const steps = state.design.steps;
+  if (!steps.length || !state.design.parts.length) return void (bar.innerHTML = "");
+  const label = stepIdx < 0 ? `Hela konstruktionen · ${steps.length} steg` : `Steg ${stepIdx + 1}/${steps.length}: ${steps[stepIdx].title}`;
+  bar.innerHTML = `<button class="icon-btn" data-sb="-1" ${stepIdx < 0 ? "disabled" : ""} title="Föregående steg">◀</button>
+    <span class="label">${esc(label)}</span>
+    <button class="icon-btn" data-sb="1" ${stepIdx >= steps.length - 1 ? "disabled" : ""} title="Nästa steg">▶</button>
+    ${stepIdx >= 0 ? `<button class="btn small" data-sb="all">Visa allt</button>` : ""}`;
+}
+$("#stepbar").addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("[data-sb]");
+  if (!b) return;
+  const v = b.dataset.sb!;
+  stepIdx = v === "all" ? -1 : Math.max(-1, Math.min(state.design.steps.length - 1, stepIdx + +v));
+  applySteps();
+  renderSteps();
+});
+
+// ---------------------------------------------------------------- render: allt
+
+function setBadge() {
+  const btn = $(`[data-tabs="right"] [data-tab="overview"]`);
+  const errs = warnings.filter((w) => w.level === "error").length;
+  const warns = warnings.filter((w) => w.level === "warn").length;
+  btn.innerHTML = `Översikt${errs ? `<span class="badge">${errs}</span>` : warns ? `<span class="badge warn">${warns}</span>` : ""}`;
+}
+
+function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
+  const d = state.design;
+  warnings = checkDesign(d, state.ws);
+  const title = $("#title") as HTMLInputElement;
+  if (document.activeElement !== title) title.value = d.title;
+  viewer.setDesign(d, state.ws.materials, opts.fit);
+  viewer.select(selected, moveMode);
+  applySteps();
+  if (!opts.keepBuild) renderBuild();
+  renderMaterials();
+  renderTools();
+  renderOverview();
+  renderParts();
+  renderCuts();
+  renderBuy();
+  renderSteps();
+  setBadge();
+  $("#empty").hidden = d.parts.length > 0;
+  ($("#undo") as HTMLButtonElement).disabled = !undoStack.length;
+  ($("#redo") as HTMLButtonElement).disabled = !redoStack.length;
+}
+
+// ---------------------------------------------------------------- topbar & meny
+
+$("#title").addEventListener("change", (e) => {
+  const v = (e.target as HTMLInputElement).value.trim() || "Projekt";
+  state.customTitle = true;
+  commit(() => (state.design.title = v));
+});
+$("#undo").addEventListener("click", undo);
+$("#redo").addEventListener("click", redo);
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (state.theme === "auto") root.removeAttribute("data-theme");
+  else root.dataset.theme = state.theme;
+  const dark = state.theme === "dark" || (state.theme === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  viewer.setTheme(dark);
+  viewer.setDesign(state.design, state.ws.materials);
+  viewer.select(selected, moveMode);
+  applySteps();
+}
+$("#theme").addEventListener("click", () => {
+  const dark = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  state.theme = dark ? "light" : "dark";
+  persist();
+  applyTheme();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => state.theme === "auto" && applyTheme());
+
+const menu = $("#menu");
+$("#menu-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  menu.hidden = !menu.hidden;
+});
+document.addEventListener("click", () => (menu.hidden = true));
+menu.addEventListener("click", (e) => {
+  const act = (e.target as HTMLElement).closest<HTMLElement>("[data-act]")?.dataset.act;
+  menu.hidden = true;
+  if (act === "new") {
+    state.customTitle = false;
+    lastParsed = null;
+    aiReply = "";
+    commit(() => (state.design = emptyDesign()));
+  } else if (act === "save") saveProject();
+  else if (act === "open") openProjects();
+  else if (act === "export") download(`${slug(state.design.title)}.json`, JSON.stringify({ app: "bygglabbet", version: 1, design: state.design, workshop: state.ws }, null, 2), "application/json");
+  else if (act === "import") $("#file").click();
+  else if (act === "screenshot") download(`${slug(state.design.title)}.png`, viewer.screenshot(), "image/png");
+  else if (act === "print") printView();
+});
+
+$("#file").addEventListener("change", async (e) => {
+  const f = (e.target as HTMLInputElement).files?.[0];
+  if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (!data.design?.parts) throw new Error();
+    commit(() => {
+      state.design = data.design;
+      if (data.workshop?.materials) state.ws = data.workshop;
+    }, { fit: true });
+    toast("Projektet är importerat.");
+  } catch {
+    toast("Filen kunde inte läsas som ett Bygglabbet-projekt.");
+  }
+  (e.target as HTMLInputElement).value = "";
+});
+
+interface SavedProject {
+  id: string;
+  savedAt: string;
+  design: Design;
+  ws: Workshop;
+}
+
+function saveProject() {
+  const list = safeGet<SavedProject[]>(PROJECTS, []);
+  const existing = list.find((p) => p.design.title === state.design.title);
+  const entry: SavedProject = { id: existing?.id ?? newId(), savedAt: new Date().toISOString(), design: state.design, ws: state.ws };
+  safeSet(PROJECTS, [entry, ...list.filter((p) => p.id !== entry.id)]);
+  toast(`"${state.design.title}" är sparat i webbläsaren.`);
+}
+
+function openProjects() {
+  const list = safeGet<SavedProject[]>(PROJECTS, []);
+  const dlg = document.createElement("dialog");
+  dlg.style.cssText = "border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);padding:16px;width:min(440px,92vw)";
+  dlg.innerHTML = `<h3 style="margin-top:0">Sparade projekt</h3>
+    ${list.length ? `<div class="list">${list.map((p) => `<div class="item"><div class="grow"><div class="name">${esc(p.design.title)}</div><div class="meta">${new Date(p.savedAt).toLocaleString("sv-SE")} · ${p.design.parts.length} delar</div></div><button class="btn small" data-open="${p.id}">Öppna</button><button class="btn ghost small" data-rm="${p.id}" title="Ta bort">✕</button></div>`).join("")}</div>` : `<p class="muted">Inga sparade projekt ännu.</p>`}
+    <div class="actions"><button class="btn" data-close style="margin-left:auto">Stäng</button></div>`;
+  document.body.appendChild(dlg);
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.addEventListener("click", (e) => {
+    const b = (e.target as HTMLElement).closest<HTMLElement>("button");
+    if (!b) return;
+    if (b.dataset.open) {
+      const p = list.find((x) => x.id === b.dataset.open)!;
+      state.customTitle = true;
+      commit(() => {
+        state.design = p.design;
+        state.ws = p.ws;
+      }, { fit: true });
+      dlg.close();
+    } else if (b.dataset.rm) {
+      safeSet(PROJECTS, list.filter((x) => x.id !== b.dataset.rm));
+      dlg.close();
+      openProjects();
+    } else if (b.hasAttribute("data-close")) dlg.close();
+  });
+  dlg.showModal();
+}
+
+function printView() {
+  const img = viewer.screenshot();
+  const d = state.design;
+  const rows = cutList(d, state.ws);
+  const buy = purchases(d, state.ws);
+  const div = document.createElement("div");
+  div.className = "print-only";
+  div.innerHTML = `<h1>${esc(d.title)}</h1><img src="${img}" alt="3D-vy"/>
+    <h2>Kapningslista</h2><table class="tbl"><tr><th>Material</th><th class="r">St</th><th class="r">Mått (mm)</th><th>Bearbetning</th><th>Delar</th></tr>
+    ${rows.map((r) => `<tr><td>${esc(r.materialName)}</td><td class="r">${r.qty}</td><td class="r">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td><td>${r.rip ? `klyv ${r.section.join("×")} ` : ""}${r.endCuts.some((a) => a) ? r.endCuts.join("/") + "°" : ""}</td><td>${esc(r.names.join(", "))}</td></tr>`).join("")}</table>
+    <h2>Inköp</h2><ul>${buy.map((p) => `<li>${p.qty} × ${esc(p.material.name)} (${esc(p.unitLabel)})</li>`).join("")}${d.hardware.map((h) => `<li>${h.qty} ${esc(h.unit)} ${esc(h.name)}</li>`).join("")}</ul>
+    <h2>Byggsteg</h2><ol>${d.steps.map((s) => `<li><strong>${esc(s.title)}</strong> – ${esc(s.text)}</li>`).join("")}</ol>
+    ${d.notes.length ? `<h2>Att tänka på</h2><ul>${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
+  document.body.appendChild(div);
+  const done = () => div.remove();
+  window.addEventListener("afterprint", done, { once: true });
+  setTimeout(() => window.print(), 50);
+}
+
+// ---------------------------------------------------------------- vy-verktyg
+
+$("#v-fit").addEventListener("click", () => viewer.fit());
+$("#v-dims").addEventListener("click", (e) => {
+  const on = !(e.currentTarget as HTMLElement).classList.contains("on");
+  (e.currentTarget as HTMLElement).classList.toggle("on", on);
+  viewer.setShowDims(on);
+});
+$("#v-xray").addEventListener("click", (e) => {
+  const on = !(e.currentTarget as HTMLElement).classList.contains("on");
+  (e.currentTarget as HTMLElement).classList.toggle("on", on);
+  viewer.setXray(on);
+  applySteps();
+});
+$("#v-move").addEventListener("click", (e) => {
+  moveMode = !moveMode;
+  (e.currentTarget as HTMLElement).classList.toggle("on", moveMode);
+  viewer.select(selected, moveMode);
+  if (moveMode && !selected) toast("Klicka på en del för att flytta den.");
+  renderParts();
+});
+$("#v-explode").addEventListener("input", (e) => viewer.setExplode(Number((e.target as HTMLInputElement).value)));
+
+// ---------------------------------------------------------------- tangentbord
+
+document.addEventListener("keydown", (e) => {
+  const tag = (e.target as HTMLElement).tagName;
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !typing) {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y" && !typing) {
+    e.preventDefault();
+    return redo();
+  }
+  if (typing) return;
+  if (e.key === "Escape") return select(null, false);
+  if (!selected) return;
+  if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    return deleteSelected();
+  }
+  const step = e.shiftKey ? 100 : 10;
+  const moves: Record<string, [keyof Part["pos"], number]> = {
+    ArrowLeft: ["x", -step], ArrowRight: ["x", step], ArrowUp: ["z", -step], ArrowDown: ["z", step], PageUp: ["y", step], PageDown: ["y", -step],
+  };
+  const mv = moves[e.key];
+  if (mv) {
+    e.preventDefault();
+    commit(() => {
+      const p = state.design.parts.find((x) => x.id === selected);
+      if (p) p.pos[mv[0]] += mv[1];
+      state.design.edited = true;
+    });
+  }
+});
+
+// ---------------------------------------------------------------- start
+
+applyTheme();
+renderAll({ fit: true });

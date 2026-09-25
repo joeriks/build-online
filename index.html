@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bygglabbet</title>
+    <meta name="description" content="Experimentera visuellt med att bygga saker i trä utifrån de material och verktyg du har." />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect x='3' y='8' width='26' height='6' rx='1' fill='%23c8914a'/><rect x='6' y='14' width='5' height='14' fill='%23a8733a'/><rect x='21' y='14' width='5' height='14' fill='%23a8733a'/></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo">▦</span> Bygglabbet</div>
+      <input id="title" class="title-input" aria-label="Projektnamn" />
+      <div class="top-actions">
+        <button id="undo" class="icon-btn" title="Ångra (Ctrl+Z)">↶</button>
+        <button id="redo" class="icon-btn" title="Gör om (Ctrl+Y)">↷</button>
+        <div class="menu">
+          <button id="menu-btn" class="btn">Projekt ▾</button>
+          <div id="menu" class="menu-list" hidden>
+            <button data-act="new">Nytt tomt projekt</button>
+            <button data-act="save">Spara projekt</button>
+            <button data-act="open">Öppna sparat…</button>
+            <hr />
+            <button data-act="export">Exportera (.json)</button>
+            <button data-act="import">Importera (.json)…</button>
+            <button data-act="screenshot">Spara bild (.png)</button>
+            <button data-act="print">Skriv ut ritning & listor</button>
+          </div>
+        </div>
+        <button id="theme" class="icon-btn" title="Byt tema">◐</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel left">
+        <nav class="tabs" data-tabs="left">
+          <button data-tab="build" class="active">Bygg</button>
+          <button data-tab="materials">Material</button>
+          <button data-tab="tools">Verktyg</button>
+        </nav>
+        <section class="tab-body" data-body="build"></section>
+        <section class="tab-body" data-body="materials" hidden></section>
+        <section class="tab-body" data-body="tools" hidden></section>
+      </aside>
+
+      <section class="viewport-wrap">
+        <div id="viewport" class="viewport"></div>
+        <div class="view-toolbar">
+          <button id="v-fit" class="chip" title="Visa hela">⤢ Anpassa</button>
+          <button id="v-dims" class="chip on" title="Visa mått">↔ Mått</button>
+          <button id="v-xray" class="chip" title="Genomskinligt">◌ Röntgen</button>
+          <button id="v-move" class="chip" title="Flytta vald del med pilarna">✥ Flytta</button>
+          <label class="chip slider-chip" title="Sprängvy">✺ <input id="v-explode" type="range" min="0" max="1" step="0.05" value="0" /></label>
+        </div>
+        <div id="stepbar" class="stepbar"></div>
+        <div id="tooltip" class="tooltip" hidden></div>
+        <div id="empty" class="empty" hidden>
+          <p><strong>Beskriv vad du vill bygga</strong> till vänster, eller välj en mall.</p>
+        </div>
+      </section>
+
+      <aside class="panel right">
+        <nav class="tabs" data-tabs="right">
+          <button data-tab="overview" class="active">Översikt</button>
+          <button data-tab="parts">Delar</button>
+          <button data-tab="cuts">Kapning</button>
+          <button data-tab="buy">Inköp</button>
+          <button data-tab="steps">Steg</button>
+        </nav>
+        <section class="tab-body" data-body="overview"></section>
+        <section class="tab-body" data-body="parts" hidden></section>
+        <section class="tab-body" data-body="cuts" hidden></section>
+        <section class="tab-body" data-body="buy" hidden></section>
+        <section class="tab-body" data-body="steps" hidden></section>
+      </aside>
+    </main>
+    <input id="file" type="file" accept="application/json,.json" hidden />
+    <div id="toast" class="toast" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
