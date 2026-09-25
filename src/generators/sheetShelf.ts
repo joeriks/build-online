@@ -1,5 +1,5 @@
 import type { Design, Material, Workshop } from "../types";
-import { Builder, columns } from "./builder";
+import { Builder, columns, pickFrame } from "./builder";
 
 /** Spånskiva (eller annan skiva ≥ 15 mm) – helst den smala 500×2500. */
 function pickShelfSheet(ws: Workshop): Material | null {
@@ -17,6 +17,7 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
   const W = +p.width, D = Math.min(+p.depth, s.stockWidth), H = +p.height;
   const n = Math.max(2, Math.round(+p.shelves));
   const maxSpan = +p.maxSpan;
+  if (p.studFrame) return withStuds(b, s, p, prompt);
   const plinth = 80;
   const canDrill = b.has("borrmaskin") || b.has("skruvdragare");
   const adjustable = !!p.adjustable && canDrill;
@@ -57,14 +58,8 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
   b.hw("Väggskruv + plugg (genom fästlisten)", bays * 2);
   b.hw("Kantlist/kantband 20 mm (framkanter)", Math.ceil((edge / 1000) * 1.1), "m");
 
-  // Sågning: 500 mm breda kap är för breda för en vanlig kap- & gersåg
-  if (b.has("bordssag")) b.note(`Kapa hyllplanen på bordssågen med geringsanslag eller släde. Ta hjälp att bära de ${s.stockLength} mm långa skivorna.`);
-  else if (b.has("cirkelsag")) b.note("Kapa skivorna med cirkelsåg och en fastspänd rak list som anslag.");
-  else if (b.has("sticksag")) b.note("Sticksåg ger ofta sneda kap i 18 mm skiva – spänn fast en list som anslag och såga långsamt.");
-  else if (b.has("handsag")) b.note("Skivorna kapas med handsåg – rita med vinkelhake och såga med den fina sidan uppåt. Många bygghandlar kapar åt dig om du tar med kapningslistan.");
-  if (b.has("kapgersag")) b.note(`Kap- & gersågen räcker oftast inte till för ${D} mm breda kap.`);
-  if (spanMm > 700) b.note(`Fackbredden ${spanMm} mm är i överkant för ${t} mm spånskiva – tunga böcker får hyllorna att svikta med tiden. Välj max ca 700 mm.`);
-  if (D < s.stockWidth) b.note(`Djupet ${D} mm betyder att alla delar måste klyvas på längden – med ${s.stockWidth} mm djup används skivans hela bredd.`);
+  sawNotes(b, s, D);
+  if (spanMm > 700) b.note(`Fackbredden ${spanMm} mm är i överkant för ${t} mm spånskiva – tunga böcker får hyllorna att svikta med tiden. Välj max ca 700 mm, eller bygg gavlarna av reglar med en framkantslist under varje hylla.`);
   if (p.adjustable && !adjustable) b.note("Ställbara hyllor kräver borrmaskin eller skruvdragare för hålraderna – nu skruvas alla hyllor fast.");
   b.note("Spånskiva suger fukt i kanterna – kantlista synliga kanter och placera inte hyllan i våtutrymmen.");
 
@@ -76,4 +71,78 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
   b.step("Kantlist", "Stryk på kantband på alla synliga framkanter och putsa av överskottet.", []);
 
   return b.design(`Spånskivehylla ${W / 1000}×${H / 1000} m`, prompt, "sheetShelf", p, { width: W + 600, height: Math.max(H + 300, 2400) });
+}
+
+/** Sågtips för skivorna – 500 mm breda kap är för breda för en vanlig kap- & gersåg. */
+function sawNotes(b: Builder, s: Material, D: number) {
+  if (b.has("bordssag")) b.note(`Kapa hyllplanen på bordssågen med geringsanslag eller släde. Ta hjälp att bära de ${s.stockLength} mm långa skivorna.`);
+  else if (b.has("cirkelsag")) b.note("Kapa skivorna med cirkelsåg och en fastspänd rak list som anslag.");
+  else if (b.has("sticksag")) b.note("Sticksåg ger ofta sneda kap i 18 mm skiva – spänn fast en list som anslag och såga långsamt.");
+  else if (b.has("handsag")) b.note("Skivorna kapas med handsåg – rita med vinkelhake och såga med den fina sidan uppåt. Många bygghandlar kapar åt dig om du tar med kapningslistan.");
+  if (b.has("kapgersag")) b.note(`Kap- & gersågen räcker oftast inte till för ${D} mm breda kap i skivan – men den är perfekt för reglarna.`);
+  if (D < s.stockWidth) b.note(`Djupet ${D} mm betyder att hyllplanen måste klyvas på längden – med ${s.stockWidth} mm djup används skivans hela bredd.`);
+}
+
+/**
+ * Variant: gavlar som "stegar" av reglar (helst 45×45) med bärlister,
+ * hyllplan av skiva och en framkantslist under varje hylla som hindrar svikt.
+ */
+function withStuds(b: Builder, s: Material, p: Design["params"], prompt: string): Design {
+  const ws = b.ws;
+  const m = ws.materials.find((x) => x.id === "regel-45x45" && x.available) ?? pickFrame(ws, "square");
+  const A = m.a, B = m.b, t = s.a;
+  const W = +p.width, D = Math.min(+p.depth, s.stockWidth), H = +p.height;
+  const n = Math.max(2, Math.round(+p.shelves));
+  const xs = columns(W, A, +p.maxSpan);
+
+  // Stegar: bakre och främre stolpe per gavel
+  xs.forEach((x, i) => {
+    b.post(`Stolpe bak ${i + 1}`, m, { x, y: 0, z: 0 }, H, "stolpar", "z");
+    b.post(`Stolpe fram ${i + 1}`, m, { x, y: 0, z: D - B }, H, "stolpar", "z");
+  });
+
+  // Hyllplanens undersida: nedersta 60 mm över golvet, översta i nivå med stolparna
+  const bottomY = 60, topY = H - t;
+  const levels = Array.from({ length: n }, (_, i) => bottomY + ((topY - bottomY) * i) / (n - 1));
+  let cleats = 0, fronts = 0, shelves = 0, edge = 0;
+  for (let bay = 0; bay < xs.length - 1; bay++) {
+    const x0 = xs[bay] + A, x1 = xs[bay + 1];
+    const f = bay + 1;
+    levels.forEach((y, i) => {
+      const cy = Math.max(0, y - B);
+      b.box(`Bärlist ${f}.${i + 1} V`, m, { x: x0, y: cy, z: 0 }, { x: A, y: y - cy, z: D }, "bärlister");
+      b.box(`Bärlist ${f}.${i + 1} H`, m, { x: x1 - A, y: cy, z: 0 }, { x: A, y: y - cy, z: D }, "bärlister");
+      cleats += 2;
+      if (x1 - x0 - 2 * A > 150) {
+        b.box(`Framkantslist ${f}.${i + 1}`, m, { x: x0 + A, y: cy, z: D - A }, { x: x1 - x0 - 2 * A, y: y - cy, z: A }, "framkantslister");
+        fronts++;
+      }
+      const name = i === 0 ? `Bottenhylla fack ${f}` : i === n - 1 ? `Topphylla fack ${f}` : `Hyllplan ${i} fack ${f}`;
+      b.box(name, s, { x: x0 + 1, y, z: 0 }, { x: x1 - x0 - 2, y: t, z: D }, "hyllplan");
+      shelves++;
+      edge += x1 - x0;
+    });
+  }
+  const spanMm = Math.round(xs[1] - xs[0] - A);
+
+  b.hw("Träskruv 5×80 (bärlist → stolpe, framkantslist)", cleats * 4 + fronts * 4);
+  b.hw("Spånskiveskruv 4×30 (hyllplan → list)", shelves * 4);
+  b.hw("Vinkeljärn / väggbeslag", xs.length * 2);
+  b.hw("Väggskruv + plugg (anpassa efter väggtyp)", xs.length * 2);
+  b.hw("Kantlist/kantband 20 mm (framkanter)", Math.ceil((edge / 1000) * 1.1), "m");
+
+  sawNotes(b, s, D);
+  if (b.has("kapgersag")) b.note(`Reglarna (${m.name}) kapas snabbt och exakt på kap- & gersågen – sätt ett stoppklossanslag så alla bärlister blir lika långa.`);
+  b.note(`Framkantslisten under varje hylla gör att ${t} mm spånskiva klarar ca 1000 mm fackbredd utan att svikta${spanMm > 1000 ? ` – nu är facken ${spanMm} mm, minska max fackbredd` : ""}.`);
+  b.note("Hyllorna vilar på bärlister och är fasta. Vill du ha ställbara hyllor, bygg gavlarna av skiva i stället.");
+  b.note("Spånskiva suger fukt i kanterna – kantlista synliga kanter och placera inte hyllan i våtutrymmen.");
+
+  b.step("Kapa", "Kapa stolpar, bärlister och framkantslister på kap- & gersågen och hyllplanen ur skivorna enligt skivschemat. Märk delarna.", []);
+  b.step("Stegar", "Lägg två stolpar på golvet och skruva bärlisterna på insidan – varje gavel blir en stege. Mät från golvet så alla bärlister hamnar i samma höjd.", ["stolpar", "bärlister"]);
+  b.step("Res och förankra", "Res stegarna mot väggen, kontrollera lod med vattenpass och fäst dem med vinkeljärn.", []);
+  b.step("Framkantslister", "Skruva framkantslisterna mellan bärlisterna i framkant.", ["framkantslister"]);
+  b.step("Hyllplan", "Lägg hyllplanen på listerna och skruva ned dem – då låses stegarna ihop till en stabil hylla.", ["hyllplan"]);
+  b.step("Kantlist", "Stryk på kantband på hyllplanens framkanter.", []);
+
+  return b.design(`Hylla av reglar & spånskiva ${W / 1000}×${H / 1000} m`, prompt, "sheetShelf", p, { width: W + 600, height: Math.max(H + 300, 2400) });
 }

@@ -127,3 +127,23 @@ describe("materialmått tolkas inte som konstruktionens mått", () => {
     expect(parsePrompt("hyllsystem av spånskivor 2,5 m brett").dims).toEqual({ width: 2500 });
   });
 });
+
+describe("spånskiva + reglar 45×45", () => {
+  it("stegar av reglar och hyllplan av spånskiva kräver färre skivor", () => {
+    const text = "hyllsystem av spånskivor och reglar 45x45 mm, 2,5 m brett och 2,5 m högt";
+    const parsed = parsePrompt(text);
+    expect(parsed.template?.id).toBe("sheetShelf");
+    expect(parsed.dims).toEqual({ width: 2500, height: 2500 });
+    const params = paramsFromParsed(parsed.template!, parsed);
+    expect(params.studFrame).toBe(true);
+    const ws = defaultWorkshop();
+    const d = parsed.template!.build(ws, params, text);
+    const mats = new Set(d.parts.map((p) => p.materialId));
+    expect([...mats].sort()).toEqual(["regel-45x45", "spanskiva-18"]);
+    expect(checkDesign(d, ws).filter((w) => w.level === "error")).toEqual([]);
+    const sheets = purchases(d, ws).find((p) => p.material.id === "spanskiva-18")!.qty;
+    const plain = parsed.template!.build(ws, { ...params, studFrame: false }, text);
+    const plainSheets = purchases(plain, ws).find((p) => p.material.id === "spanskiva-18")!.qty;
+    expect(sheets).toBeLessThan(plainSheets);
+  });
+});

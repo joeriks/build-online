@@ -50,7 +50,8 @@ export const TEMPLATES: Template[] = [
     params: [mm("width", "Bredd", 2500, 400, 6000), mm("height", "Höjd", 2500, 400, 3000), mm("depth", "Djup", 500, 150, 600),
       { key: "shelves", label: "Hyllplan per fack (inkl. topp & botten)", type: "number", min: 2, max: 12, step: 1, default: 6 },
       mm("maxSpan", "Max fackbredd", 800, 300, 1200),
-      { key: "adjustable", label: "Ställbara hyllor (borrade hålrader)", type: "bool", default: true }],
+      { key: "studFrame", label: "Gavlar av reglar 45×45 (stegar)", type: "bool", default: false },
+      { key: "adjustable", label: "Ställbara hyllor (borrade hålrader, bara skivgavlar)", type: "bool", default: true }],
     build: sheetShelf,
   },
   {

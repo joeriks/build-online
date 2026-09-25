@@ -40,6 +40,8 @@ export interface Parsed {
   count: number | null;
   againstWall: boolean | null;
   door: boolean | null;
+  /** Texten nämner reglar */
+  studs: boolean;
 }
 
 const MAT_NOUN = String.raw`(?:spånskiv|spånplatt|skiv|bräd|regl|regel|läkt|plank|virke|plywood|osb|trall)\p{L}*`;
@@ -109,7 +111,9 @@ export function parsePrompt(text: string): Parsed {
   if (/utan dörr/.test(s)) door = false;
   else if (/dörr/.test(s)) door = true;
 
-  return { template, dims, count, againstWall, door };
+  const studs = /regel|reglar|regelvirke|45\s*[x×]\s*45/.test(raw);
+
+  return { template, dims, count, againstWall, door, studs };
 }
 
 /** Översätt tolkningen till mallens parametrar. */
@@ -131,6 +135,8 @@ export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, nu
   }
   if (parsed.againstWall != null && "againstWall" in out) out.againstWall = parsed.againstWall;
   if (parsed.door != null && "door" in out) out.door = parsed.door;
+  // "spånskivor och reglar" → gavlar av reglar
+  if ("studFrame" in out && parsed.studs) out.studFrame = true;
   // Hyllsystem: fler hyllplan om det är högt och antal inte angetts
   if (t.id === "shelf" && parsed.count == null) out.shelves = Math.max(2, Math.round(+out.height / 380));
   return out;
