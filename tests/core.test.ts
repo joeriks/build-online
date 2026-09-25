@@ -168,3 +168,33 @@ describe("enheter (fack, gavlar, lådor)", () => {
     expect(l1.some((n) => n.startsWith("Löplist"))).toBe(false);
   });
 });
+
+describe("stegehylla med hela skivor", () => {
+  const t = () => TEMPLATES.find((x) => x.id === "sheetShelf")!;
+  it("hyllplanen är osågade 2500×500-skivor och stolparna står utanför", () => {
+    const text = "stegehylla av spånskivor och reglar 45x45, 2,5 m bred och 3 m hög";
+    const parsed = parsePrompt(text);
+    expect(parsed.template?.id).toBe("sheetShelf");
+    const params = paramsFromParsed(t(), parsed);
+    expect(params.fullBoards).toBe(true);
+    const ws = defaultWorkshop();
+    const d = t().build(ws, params, text);
+    const shelves = d.parts.filter((p) => p.materialId === "spanskiva-18");
+    expect(shelves.length).toBe(+params.shelves);
+    expect(shelves.every((p) => p.dims.x === 2500 && p.dims.z === 500)).toBe(true);
+    expect(purchases(d, ws).find((p) => p.material.id === "spanskiva-18")!.qty).toBe(+params.shelves);
+    expect(checkDesign(d, ws).filter((w) => w.level === "error")).toEqual([]);
+    // inga hyllplan krockar med stolparna i djupled
+    const posts = d.parts.filter((p) => p.name.startsWith("Stolpe"));
+    for (const s of shelves)
+      for (const p of posts) expect(Math.abs(s.pos.z - p.pos.z)).toBeGreaterThanOrEqual((s.dims.z + p.dims.z) / 2);
+  });
+  it("bredare än en skiva skarvas över en stege", () => {
+    const ws = defaultWorkshop();
+    const d = t().build(ws, { width: 4000, height: 2000, depth: 500, shelves: 4, maxSpan: 800, fullBoards: true, studFrame: false, adjustable: false }, "");
+    const lvl1 = d.parts.filter((p) => p.unit === "Hyllplan 1");
+    expect(lvl1.length).toBe(2);
+    expect(lvl1.every((p) => p.dims.x <= 2500)).toBe(true);
+    expect(checkDesign(d, ws).filter((w) => w.level === "error")).toEqual([]);
+  });
+});

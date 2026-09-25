@@ -17,6 +17,7 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
   const W = +p.width, D = Math.min(+p.depth, s.stockWidth), H = +p.height;
   const n = Math.max(2, Math.round(+p.shelves));
   const maxSpan = +p.maxSpan;
+  if (p.fullBoards) return withLadders(b, s, p, prompt);
   if (p.studFrame) return withStuds(b, s, p, prompt);
   const plinth = 80;
   const canDrill = b.has("borrmaskin") || b.has("skruvdragare");
@@ -150,4 +151,80 @@ function withStuds(b: Builder, s: Material, p: Design["params"], prompt: string)
   b.step("Kantlist", "Stryk på kantband på hyllplanens framkanter.", []);
 
   return b.design(`Hylla av reglar & spånskiva ${W / 1000}×${H / 1000} m`, prompt, "sheetShelf", p, { width: W + 600, height: Math.max(H + 300, 2400) });
+}
+
+/**
+ * Variant: stegar av reglar med stolparna UTANFÖR skivan (bak och fram) och tvärpinnar emellan.
+ * Hyllplanen är hela skivor som går igenom alla stegar – skivorna behöver oftast inte sågas alls.
+ */
+function withLadders(b: Builder, s: Material, p: Design["params"], prompt: string): Design {
+  const ws = b.ws;
+  const m = ws.materials.find((x) => x.id === "regel-45x45" && x.available) ?? pickFrame(ws, "square");
+  const A = m.a, B = m.b, t = s.a;
+  const W = +p.width, H = +p.height;
+  const Sd = Math.min(+p.depth, s.stockWidth); // hyllplanens djup
+  const D = Sd + 2 * B; // totalt djup med stolpar bak och fram
+  const n = Math.max(2, Math.round(+p.shelves));
+  const xs = columns(W, A, +p.maxSpan);
+  const centers = xs.map((x) => x + A / 2);
+
+  // Hyllnivåer = hyllplanens undersida (= pinnarnas översida)
+  const bottomY = 80, topY = H - t;
+  const levels = Array.from({ length: n }, (_, i) => bottomY + ((topY - bottomY) * i) / (n - 1));
+
+  let rungs = 0;
+  xs.forEach((x, i) => {
+    b.unit = `Stege ${i + 1}`;
+    b.post(`Stolpe bak ${i + 1}`, m, { x, y: 0, z: 0 }, H, "stegar", "z");
+    b.post(`Stolpe fram ${i + 1}`, m, { x, y: 0, z: B + Sd }, H, "stegar", "z");
+    levels.forEach((y, li) => {
+      b.box(`Pinne ${i + 1}.${li + 1}`, m, { x, y: y - B, z: B }, { x: A, y: B, z: Sd }, "stegar");
+      rungs++;
+    });
+  });
+
+  // Hyllplanens längd: hela bredden, skarvade över en stege om skivan är för kort
+  const cuts: [number, number][] = [];
+  let start = 0;
+  while (W - start > s.stockLength) {
+    const c = [...centers].reverse().find((c) => c > start + 100 && c - start <= s.stockLength);
+    if (c == null) break;
+    cuts.push([start, c]);
+    start = c;
+  }
+  cuts.push([start, W]);
+  let boards = 0;
+  levels.forEach((y, li) => {
+    b.unit = `Hyllplan ${li + 1}`;
+    cuts.forEach(([x0, x1], k) => {
+      b.box(cuts.length > 1 ? `Hyllplan ${li + 1}${String.fromCharCode(97 + k)}` : `Hyllplan ${li + 1}`, s, { x: x0 + (k ? 1 : 0), y, z: B }, { x: x1 - x0 - (k ? 1 : 0), y: t, z: Sd }, "hyllplan");
+      boards++;
+    });
+  });
+  b.unit = null;
+
+  const spanMm = Math.round(xs[1] - xs[0] - A);
+  const uncut = cuts.length === 1 && Math.abs(W - s.stockLength) <= 3 && Sd === s.stockWidth;
+
+  b.hw("Träskruv 5×100 (genom stolpe in i pinne, förborra)", rungs * 4);
+  b.hw("Spånskiveskruv 4×40 (hyllplan → pinne)", n * xs.length * 2);
+  b.hw("Vinkeljärn / väggbeslag (bakre stolpar)", xs.length * 2);
+  b.hw("Väggskruv + plugg (anpassa efter väggtyp)", xs.length * 2);
+  b.hw("Kantlist/kantband 20 mm (framkanter)", Math.ceil((n * W) / 1000 * 1.05), "m");
+
+  if (uncut) b.note(`Hyllplanen är hela skivor (${s.stockLength}×${s.stockWidth}) – ingen skiva behöver sågas. Bara reglarna kapas.`);
+  else sawNotes(b, s, Sd);
+  if (cuts.length > 1) b.note("Hyllplanen är skarvade – skarven ligger mitt på en stege så båda ändarna vilar på pinnen.");
+  if (b.has("kapgersag")) b.note(`Stolpar och pinnar kapas på kap- & gersågen – sätt ett stoppklossanslag så alla ${rungs} pinnar blir exakt ${Sd} mm.`);
+  if (spanMm > 850) b.note(`Avståndet mellan stegarna (${spanMm} mm) är stort för ${t} mm spånskiva – minska "Max fackbredd" till ca 800 mm.`);
+  b.note(`Stolparna står utanför hyllplanen, så hyllan blir ${D} mm djup totalt. Det ger en luftig "stegehylla" där hyllplanen går hela vägen utan avbrott.`);
+  b.note("Förborra pinnarna så de inte spricker. Stegarna blir stadiga när hyllplanen skruvas fast och hyllan förankras i väggen.");
+
+  b.step("Kapa reglarna", `Kapa ${xs.length * 2} stolpar à ${H} mm och ${rungs} pinnar à ${Sd} mm.`, []);
+  b.step("Bygg stegarna", "Lägg två stolpar på golvet, lägg pinnarna emellan på rätt höjd (använd en distansbit) och skruva två skruvar genom stolpen in i varje pinnände. Kontrollera diagonalerna.", ["stegar"]);
+  b.step("Res och förankra", "Res stegarna mot väggen med rätt avstånd och fäst de bakre stolparna i väggen med vinkeljärn.", []);
+  b.step("Lägg i hyllplanen", "Trä in hyllplanen mellan stolparna, lägg dem på pinnarna och skruva ned dem i varje pinne. Då låses stegarna ihop.", ["hyllplan"]);
+  b.step("Kantlist", "Stryk på kantband på hyllplanens framkanter.", []);
+
+  return b.design(`Stegehylla ${W / 1000}×${H / 1000} m`, prompt, "sheetShelf", p, { width: W + 600, height: Math.max(H + 300, 2400) });
 }
