@@ -43,7 +43,8 @@ Mått, antal och alternativ kan sedan justeras med reglage.
 ## Fri redigering
 
 - Klicka på en del i 3D-vyn för att ändra namn, material, mått, position, rotation och kapvinklar
-- **Flytta** med dragreglage i 3D, eller piltangenter (10 mm, Shift = 100 mm, PgUp/PgDn i höjd)
+- **Markera hela enheter** – dubbelklicka på en del i 3D (eller välj under *Markera enhet*) för att ta ett helt fack, en gavel, en låda eller ett dörrblad; Shift-klicka för att lägga till/ta bort delar
+- **Flytta** markeringen med dragpilar i 3D, med ΔX/ΔY/ΔZ, eller piltangenter (10 mm, Shift = 100 mm, PgUp/PgDn i höjd)
 - Duplicera, vrid 90°, ta bort, lägg till nya delar
 - Ångra/gör om (Ctrl+Z / Ctrl+Y)
 - Spara projekt i webbläsaren, exportera/importera JSON, spara bild, skriv ut ritning och listor

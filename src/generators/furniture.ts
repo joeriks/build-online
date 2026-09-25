@@ -30,15 +30,18 @@ export function workbench(ws: Workshop, p: Design["params"], prompt: string): De
     b.beamZ(`Tvärslå ${i + 1}`, m, { x: over + x, y: legH, z: zB + A }, fd - 2 * A, "sarg");
 
   if (p.lowerShelf) {
+    b.unit = "Underhylla";
     const y = 150;
     // Reglar på benens insida – då kan hyllan gå hel förbi mittbenen
     b.beamX("Hyllregel fram", m, { x: over, y, z: zF - A }, fw, "underhylla", true);
     b.beamX("Hyllregel bak", m, { x: over, y, z: zB + B }, fw, "underhylla", true);
     fillSurface(b, "Underhylla", "underhylla", over, y + B, zB + B, fw, zF - zB - B, { minSheet: 12 });
   }
+  b.unit = "Bänkskiva";
   for (let l = 0; l < layers; l++)
     fillSurface(b, layers > 1 ? `Bänkskiva lager ${l + 1}` : "Bänkskiva", "skiva", 0, H - t * (layers - l), 0, W, D, { minSheet: 15, gap: 0 });
 
+  b.unit = null;
   b.hw("Träskruv 6×100 (sarg → ben)", legsX.length * 2 * 2 + legsX.length * 2);
   b.hw("Träskruv 4×50 (skiva)", Math.ceil((W / 200) * 3) * layers);
   if (p.lowerShelf) b.hw("Träskruv 5×80 (hyllreglar)", 4 + legsX.length * 2);
@@ -111,7 +114,7 @@ export function bench(ws: Workshop, p: Design["params"], prompt: string): Design
     b.beamZ(`Fotslå ${i + 1}`, m, { x: x0 + x, y: 120, z: over + B }, fd - 2 * B, "ram");
   }
   b.beamX("Längsregel", m, { x: x0, y: 120 + B, z: over + fd / 2 - A / 2 }, fw, "ram");
-  fillSurface(b, "Sits", "sits", 0, H - t, 0, W, D, { preferSheet: false, gap: 8 });
+  b.inUnit("Sits", () => fillSurface(b, "Sits", "sits", 0, H - t, 0, W, D, { preferSheet: false, gap: 8 }));
   b.hw("Träskruv 5×80", legXs.length * 8 + 2);
   b.hw("Träskruv 4×50 (sits)", Math.ceil(W / 300) * 2 * legXs.length);
   b.step("Kapa", "Kapa alla delar.", []);

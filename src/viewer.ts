@@ -8,8 +8,10 @@ import { bounds } from "./analysis";
 const S = 0.001; // mm → meter i scenen
 
 export interface ViewerOptions {
-  onSelect: (id: string | null) => void;
-  onMove: (id: string, pos: Vec3) => void;
+  /** mode: "replace" = vanligt klick, "toggle" = Shift/Ctrl-klick, "unit" = dubbelklick (hela enheten) */
+  onSelect: (id: string | null, mode: "replace" | "toggle" | "unit") => void;
+  /** Markerade delar har flyttats `delta` mm */
+  onMove: (ids: string[], delta: Vec3) => void;
   onHover: (part: Part | null, x: number, y: number) => void;
 }
 
@@ -65,7 +67,10 @@ export class Viewer {
   env = new THREE.Group();
   meshes = new Map<string, THREE.Mesh>();
   matCache = new Map<string, THREE.MeshStandardMaterial>();
-  selected: string | null = null;
+  selected = new Set<string>();
+  /** Osynligt handtag i mitten av markeringen som flyttpilarna sitter på */
+  private pivot = new THREE.Object3D();
+  private dragStart: { pivot: THREE.Vector3; meshes: Map<string, THREE.Vector3> } | null = null;
   explode = 0;
   showDims = true;
   xray = false;
@@ -98,18 +103,29 @@ export class Viewer {
     this.gizmo = new TransformControls(this.camera, this.renderer.domElement);
     this.gizmo.setTranslationSnap(5 * S);
     this.gizmo.setSize(0.8);
+    this.scene.add(this.pivot);
     this.gizmo.addEventListener("dragging-changed", (e) => {
       this.controls.enabled = !e.value;
-      if (!e.value && this.selected) {
-        const m = this.meshes.get(this.selected);
-        const part = this.design?.parts.find((p) => p.id === this.selected);
-        if (m && part) {
-          const off = this.explodeOffset(part);
-          this.opts.onMove(this.selected, {
-            x: Math.round(m.position.x / S - off.x), y: Math.round(m.position.y / S - off.y), z: Math.round(m.position.z / S - off.z),
-          });
-        }
+      if (e.value) {
+        this.dragStart = {
+          pivot: this.pivot.position.clone(),
+          meshes: new Map([...this.selected].flatMap((id) => {
+            const m = this.meshes.get(id);
+            return m ? [[id, m.position.clone()] as const] : [];
+          })),
+        };
+      } else if (this.dragStart) {
+        const d = this.pivot.position.clone().sub(this.dragStart.pivot);
+        this.dragStart = null;
+        const delta = { x: Math.round(d.x / S), y: Math.round(d.y / S), z: Math.round(d.z / S) };
+        if (delta.x || delta.y || delta.z) this.opts.onMove([...this.selected], delta);
       }
+    });
+    // Flytta alla markerade delar live medan handtaget dras
+    this.gizmo.addEventListener("objectChange", () => {
+      if (!this.dragStart) return;
+      const d = this.pivot.position.clone().sub(this.dragStart.pivot);
+      for (const [id, start] of this.dragStart.meshes) this.meshes.get(id)?.position.copy(start).add(d);
     });
     this.scene.add(this.gizmo.getHelper());
 
@@ -133,7 +149,11 @@ export class Viewer {
       if (Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) > 4) return;
       if ((this.gizmo as unknown as { dragging: boolean }).dragging) return;
       const hit = this.pick(e);
-      this.opts.onSelect(hit);
+      this.opts.onSelect(hit, e.shiftKey || e.ctrlKey || e.metaKey ? "toggle" : "replace");
+    });
+    dom.addEventListener("dblclick", (e) => {
+      const hit = this.pick(e as PointerEvent);
+      if (hit) this.opts.onSelect(hit, "unit");
     });
     dom.addEventListener("pointermove", (e) => {
       const id = this.pick(e);
@@ -265,7 +285,7 @@ export class Viewer {
   private applyHighlight() {
     for (const [id, m] of this.meshes) {
       const part = this.design?.parts.find((p) => p.id === id);
-      const sel = id === this.selected;
+      const sel = this.selected.has(id);
       const active = (this.activeGroups && part && this.activeGroups.has(part.group)) || this.hlIds.has(id);
       const base = m.material as THREE.MeshStandardMaterial;
       if (sel || active) {
@@ -285,12 +305,15 @@ export class Viewer {
     }
   }
 
-  select(id: string | null, move: boolean) {
-    this.selected = id;
+  select(ids: string[], move: boolean) {
+    this.selected = new Set(ids.filter((id) => this.meshes.has(id)));
     this.applyHighlight();
-    const m = id ? this.meshes.get(id) : null;
-    if (m && move) this.gizmo.attach(m);
-    else this.gizmo.detach();
+    if (!move || !this.selected.size) return void this.gizmo.detach();
+    // Handtaget placeras i mitten av markeringens omslutande låda
+    const box = new THREE.Box3();
+    for (const id of this.selected) box.expandByObject(this.meshes.get(id)!);
+    box.getCenter(this.pivot.position);
+    this.gizmo.attach(this.pivot);
   }
 
   setHighlight(ids: string[]) {
@@ -313,7 +336,7 @@ export class Viewer {
   setXray(v: boolean) {
     this.xray = v;
     if (this.design) this.setDesign(this.design, this.materials);
-    this.select(this.selected, !!this.gizmo.object);
+    this.select([...this.selected], !!this.gizmo.object);
   }
 
   setShowDims(v: boolean) {

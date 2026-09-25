@@ -59,7 +59,8 @@ function initialState(): State {
 
 const state = initialState();
 if (!state.design.prompt) state.design.prompt = "";
-let selected: string | null = null;
+/** Markerade delar (id). Flera = hel enhet, t.ex. ett fack. */
+let selection: string[] = [];
 let moveMode = false;
 let stepIdx = -1;
 let lastParsed: Parsed | null = null;
@@ -85,7 +86,7 @@ function commit(fn: () => void, opts: { fit?: boolean; keepBuild?: boolean } = {
 }
 
 function afterChange(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
-  if (selected && !state.design.parts.some((p) => p.id === selected)) selected = null;
+  if (selection.length) selection = selection.filter((id) => state.design.parts.some((p) => p.id === id));
   if (stepIdx >= state.design.steps.length) stepIdx = -1;
   persist();
   renderAll(opts);
@@ -203,13 +204,8 @@ async function runAi(text?: string) {
 // ---------------------------------------------------------------- viewer
 
 const viewer = new Viewer($("#viewport"), {
-  onSelect: (id) => select(id),
-  onMove: (id, pos) =>
-    commit(() => {
-      const p = state.design.parts.find((x) => x.id === id);
-      if (p) p.pos = pos;
-      state.design.edited = true;
-    }),
+  onSelect: (id, mode) => select(id, mode),
+  onMove: (ids, delta) => moveParts(ids, delta),
   onHover: (part, x, y) => {
     const tip = $("#tooltip");
     if (!part) return void (tip.hidden = true);
@@ -222,12 +218,41 @@ const viewer = new Viewer($("#viewport"), {
   },
 });
 
-function select(id: string | null, scroll = true) {
-  selected = id;
-  viewer.select(id, moveMode);
+/** Delar som hör till samma enhet (t.ex. "Fack 2") – eller samma grupp om delen saknar enhet. */
+function unitMates(id: string): string[] {
+  const p = state.design.parts.find((x) => x.id === id);
+  if (!p) return [];
+  return state.design.parts.filter((x) => (p.unit ? x.unit === p.unit : x.group === p.group)).map((x) => x.id);
+}
+
+function select(id: string | null, mode: "replace" | "toggle" | "unit" = "replace", scroll = true) {
+  if (!id) selection = [];
+  else if (mode === "toggle") selection = selection.includes(id) ? selection.filter((x) => x !== id) : [...selection, id];
+  else if (mode === "unit") selection = unitMates(id);
+  else selection = [id];
+  setSelection(selection, scroll);
+}
+
+function setSelection(ids: string[], scroll = true) {
+  selection = ids;
+  viewer.select(selection, moveMode);
   viewer.setHighlight([]);
   renderParts();
-  if (id && scroll) switchTab("right", "parts");
+  if (selection.length && scroll) switchTab("right", "parts");
+}
+
+/** Flytta flera delar lika mycket (mm). */
+function moveParts(ids: string[], delta: { x: number; y: number; z: number }) {
+  const set = new Set(ids);
+  commit(() => {
+    for (const p of state.design.parts)
+      if (set.has(p.id)) {
+        p.pos.x += delta.x;
+        p.pos.y += delta.y;
+        p.pos.z += delta.z;
+      }
+    state.design.edited = true;
+  });
 }
 
 function applySteps() {
@@ -590,8 +615,8 @@ body("overview").addEventListener("click", (e) => {
   if (!w) return;
   const ids = warnings[+w.dataset.warn!]?.partIds ?? [];
   if (ids.length) {
-    selected = null;
-    viewer.select(null, false);
+    selection = [];
+    viewer.select([], false);
     viewer.setHighlight(ids);
     toast(`Markerat ${ids.length} del${ids.length > 1 ? "ar" : ""} i 3D-vyn.`);
   }
@@ -602,14 +627,23 @@ body("overview").addEventListener("click", (e) => {
 function renderParts() {
   const d = state.design;
   const el = body("parts");
-  const p = d.parts.find((x) => x.id === selected);
+  const sel = new Set(selection);
+  const p = selection.length === 1 ? d.parts.find((x) => x.id === selection[0]) : undefined;
   const matOptions = (cur: string) =>
     state.ws.materials.map((m) => `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${esc(m.name)}${m.available ? "" : " (ej tillg.)"}</option>`).join("");
   const num = (name: string, v: number, label: string) => `<label>${label}<input type="number" name="${name}" value="${Math.round(v * 10) / 10}" step="1"/></label>`;
-  const editor = p ? `
+  const moveBtn = `<button class="btn small ${moveMode ? "primary" : ""}" data-pact="move">✥ Flytta i 3D</button>`;
+
+  let editor: string;
+  if (p) {
+    editor = `
     <div class="card" data-part="${p.id}">
       <label class="field"><span>Namn</span><input type="text" name="name" value="${esc(p.name)}"/></label>
       <div class="grid2"><label>Material<select name="materialId">${matOptions(p.materialId)}</select></label><label>Grupp<input type="text" name="group" value="${esc(p.group)}"/></label></div>
+      <div class="actions" style="margin-top:8px">
+        ${p.unit ? `<button class="btn small" data-pact="selunit">Markera hela ${esc(p.unit)}</button>` : ""}
+        <button class="btn small" data-pact="selgroup">Markera alla "${esc(p.group)}"</button>
+      </div>
       <h3>Storlek (mm)</h3><div class="grid3">${num("dims.x", p.dims.x, "X (bredd)")}${num("dims.y", p.dims.y, "Y (höjd)")}${num("dims.z", p.dims.z, "Z (djup)")}</div>
       <h3>Position – mittpunkt (mm)</h3><div class="grid3">${num("pos.x", p.pos.x, "X")}${num("pos.y", p.pos.y, "Y")}${num("pos.z", p.pos.z, "Z")}</div>
       <h3>Rotation (°) & vinkelkap</h3><div class="grid3">${num("rot.x", p.rot.x, "Rot X")}${num("rot.y", p.rot.y, "Rot Y")}${num("rot.z", p.rot.z, "Rot Z")}</div>
@@ -617,20 +651,52 @@ function renderParts() {
       <div class="actions">
         <button class="btn small" data-pact="dup">Duplicera</button>
         <button class="btn small" data-pact="rotate">Vrid 90°</button>
-        <button class="btn small ${moveMode ? "primary" : ""}" data-pact="move">✥ Flytta i 3D</button>
+        ${moveBtn}
         <button class="btn small danger" data-pact="del" style="margin-left:auto">Ta bort</button>
       </div>
-      <p class="small muted" style="margin:8px 0 0">Tips: piltangenter flyttar 10 mm (Shift = 100 mm), PgUp/PgDn i höjd, Delete tar bort.</p>
-    </div>` : `<p class="small muted" style="margin-top:0">Klicka på en del i 3D-vyn eller i listan för att ändra den.</p>`;
+    </div>`;
+  } else if (selection.length > 1) {
+    const parts = d.parts.filter((x) => sel.has(x.id));
+    const units = [...new Set(parts.map((x) => x.unit ?? "–"))];
+    const label = units.length === 1 && units[0] !== "–" ? esc(units[0]) : `${parts.length} delar`;
+    const b = bounds(parts);
+    editor = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><strong>${label}</strong><span class="small muted">${parts.length} delar markerade</span></div>
+      <div class="small muted" style="margin-top:4px">${fmt(b.max.x - b.min.x)} × ${fmt(b.max.z - b.min.z)} × ${fmt(b.max.y - b.min.y)} mm (B × D × H)</div>
+      <h3>Flytta alla (mm)</h3>
+      <div class="grid3"><label>ΔX<input type="number" id="dx" value="0" step="10"/></label><label>ΔY<input type="number" id="dy" value="0" step="10"/></label><label>ΔZ<input type="number" id="dz" value="0" step="10"/></label></div>
+      <div class="actions">
+        <button class="btn small" data-pact="nudge">Flytta</button>
+        ${moveBtn}
+        <button class="btn small" data-pact="dup">Duplicera</button>
+        <button class="btn small ghost" data-pact="clear">Avmarkera</button>
+        <button class="btn small danger" data-pact="del" style="margin-left:auto">Ta bort alla</button>
+      </div>
+    </div>`;
+  } else editor = `<p class="small muted" style="margin-top:0">Klicka på en del i 3D-vyn eller i listan för att ändra den. <strong>Dubbelklicka</strong> för att markera hela enheten (t.ex. ett fack) och Shift-klicka för att lägga till eller ta bort delar.</p>`;
+
+  // Snabbval av enheter (fack, gavlar, lådor …)
+  const units: string[] = [];
+  for (const x of d.parts) if (x.unit && !units.includes(x.unit)) units.push(x.unit);
+  const unitChips = units.length
+    ? `<h3>Markera enhet</h3><div class="actions" style="margin-top:0">${units.map((u) => {
+        const ids = d.parts.filter((x) => x.unit === u).map((x) => x.id);
+        const on = ids.length === selection.length && ids.every((id) => sel.has(id));
+        return `<button class="chip ${on ? "on" : ""}" data-unit="${esc(u)}">${esc(u)}</button>`;
+      }).join("")}</div>`
+    : "";
 
   const groups = new Map<string, Part[]>();
   for (const x of d.parts) groups.set(x.group, [...(groups.get(x.group) ?? []), x]);
   el.innerHTML = `${editor}
+    ${unitChips}
+    <p class="small muted" style="margin:10px 0 0">Piltangenter flyttar markeringen 10 mm (Shift = 100 mm), PgUp/PgDn i höjd, Delete tar bort.</p>
     <div class="actions" style="margin:8px 0 4px"><button class="btn small" id="part-add">+ Ny del</button></div>
     ${[...groups].map(([g, list]) => `<h3>${esc(g)} (${list.length})</h3><table class="tbl">${list.map((x) => {
       const m = matOf(x.materialId);
       const s = m ? partShape(x, m) : null;
-      return `<tr class="click ${x.id === selected ? "sel" : ""}" data-sel="${x.id}"><td>${esc(x.name)}<div class="small muted">${esc(m?.name ?? "?")}</div></td><td class="r small">${s ? (m!.kind === "linear" ? `${fmt(s.length)} mm` : `${fmt(s.length)}×${fmt(s.section[1])}`) : ""}</td></tr>`;
+      return `<tr class="click ${sel.has(x.id) ? "sel" : ""}" data-sel="${x.id}"><td>${esc(x.name)}<div class="small muted">${esc(m?.name ?? "?")}${x.unit ? ` · ${esc(x.unit)}` : ""}</div></td><td class="r small">${s ? (m!.kind === "linear" ? `${fmt(s.length)} mm` : `${fmt(s.length)}×${fmt(s.section[1])}`) : ""}</td></tr>`;
     }).join("")}</table>`).join("")}`;
 }
 
@@ -638,35 +704,38 @@ const partsEl = body("parts");
 partsEl.addEventListener("click", (e) => {
   const tgt = e.target as HTMLElement;
   const row = tgt.closest<HTMLElement>("[data-sel]");
-  if (row) return select(row.dataset.sel!, false);
+  if (row) return select(row.dataset.sel!, e.shiftKey || e.ctrlKey || e.metaKey ? "toggle" : "replace", false);
+  const chip = tgt.closest<HTMLElement>("[data-unit]");
+  if (chip) return setSelection(state.design.parts.filter((x) => x.unit === chip.dataset.unit).map((x) => x.id), false);
   const b = tgt.closest<HTMLElement>("button");
   if (!b) return;
   if (b.id === "part-add") return addPart();
   const act = b.dataset.pact;
-  const p = state.design.parts.find((x) => x.id === selected);
+  if (act === "move") {
+    moveMode = !moveMode;
+    $("#v-move").classList.toggle("on", moveMode);
+    viewer.select(selection, moveMode);
+    return renderParts();
+  }
+  if (act === "del") return deleteSelected();
+  if (act === "dup") return duplicateSelected();
+  if (act === "clear") return select(null, "replace", false);
+  if (act === "nudge") {
+    const v = (id: string) => Number(($(`#${id}`) as HTMLInputElement).value) || 0;
+    const delta = { x: v("dx"), y: v("dy"), z: v("dz") };
+    if (delta.x || delta.y || delta.z) moveParts(selection, delta);
+    return;
+  }
+  const p = selection.length === 1 ? state.design.parts.find((x) => x.id === selection[0]) : undefined;
   if (!p) return;
-  if (act === "del") deleteSelected();
-  else if (act === "dup") {
-    const c: Part = JSON.parse(JSON.stringify(p));
-    c.id = newId();
-    c.name = `${p.name} (kopia)`;
-    c.pos.x += Math.max(50, p.dims.x + 20);
-    commit(() => {
-      state.design.parts.push(c);
-      state.design.edited = true;
-    });
-    select(c.id);
-  } else if (act === "rotate") {
+  if (act === "selunit" && p.unit) setSelection(unitMates(p.id), false);
+  else if (act === "selgroup") setSelection(state.design.parts.filter((x) => x.group === p.group).map((x) => x.id), false);
+  else if (act === "rotate") {
     commit(() => {
       // vrid 90° runt Y genom att byta X och Z
       [p.dims.x, p.dims.z] = [p.dims.z, p.dims.x];
       state.design.edited = true;
     });
-  } else if (act === "move") {
-    moveMode = !moveMode;
-    $("#v-move").classList.toggle("on", moveMode);
-    viewer.select(selected, moveMode);
-    renderParts();
   }
 });
 partsEl.addEventListener("change", (e) => {
@@ -717,13 +786,45 @@ function addPart() {
 }
 
 function deleteSelected() {
-  if (!selected) return;
-  const id = selected;
-  selected = null;
+  if (!selection.length) return;
+  const ids = new Set(selection);
+  selection = [];
   commit(() => {
-    state.design.parts = state.design.parts.filter((x) => x.id !== id);
+    state.design.parts = state.design.parts.filter((x) => !ids.has(x.id));
     state.design.edited = true;
   });
+}
+
+/** Duplicera markeringen och lägg kopian bredvid (enheter får eget namn så de hänger ihop). */
+function duplicateSelected() {
+  const src = state.design.parts.filter((x) => selection.includes(x.id));
+  if (!src.length) return;
+  const b = bounds(src);
+  const dx = Math.round(b.max.x - b.min.x + 100);
+  const units = new Map<string, string>();
+  const copies = src.map((p) => {
+    const c: Part = JSON.parse(JSON.stringify(p));
+    c.id = newId();
+    c.name = src.length > 1 ? p.name : `${p.name} (kopia)`;
+    c.pos.x += dx;
+    if (p.unit) {
+      if (!units.has(p.unit)) units.set(p.unit, uniqueUnit(`${p.unit} kopia`));
+      c.unit = units.get(p.unit);
+    }
+    return c;
+  });
+  commit(() => {
+    state.design.parts.push(...copies);
+    state.design.edited = true;
+  });
+  setSelection(copies.map((c) => c.id));
+}
+
+function uniqueUnit(base: string) {
+  const used = new Set(state.design.parts.map((p) => p.unit));
+  let name = base, i = 2;
+  while (used.has(name)) name = `${base} ${i++}`;
+  return name;
 }
 
 // ---------------------------------------------------------------- render: Kapning
@@ -765,8 +866,8 @@ body("cuts").addEventListener("click", (e) => {
   const rows = (body("cuts") as HTMLElement & { _rows?: Map<string, ReturnType<typeof cutList>> })._rows;
   const row = rows?.get(name)?.[+i];
   if (row) {
-    selected = null;
-    viewer.select(null, false);
+    selection = [];
+    viewer.select([], false);
     viewer.setHighlight(row.partIds);
   }
 });
@@ -864,7 +965,7 @@ function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   const title = $("#title") as HTMLInputElement;
   if (document.activeElement !== title) title.value = d.title;
   viewer.setDesign(d, state.ws.materials, opts.fit);
-  viewer.select(selected, moveMode);
+  viewer.select(selection, moveMode);
   applySteps();
   if (!opts.keepBuild) renderBuild();
   renderMaterials();
@@ -897,7 +998,7 @@ function applyTheme() {
   const dark = state.theme === "dark" || (state.theme === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
   viewer.setTheme(dark);
   viewer.setDesign(state.design, state.ws.materials);
-  viewer.select(selected, moveMode);
+  viewer.select(selection, moveMode);
   applySteps();
 }
 $("#theme").addEventListener("click", () => {
@@ -1027,8 +1128,8 @@ $("#v-xray").addEventListener("click", (e) => {
 $("#v-move").addEventListener("click", (e) => {
   moveMode = !moveMode;
   (e.currentTarget as HTMLElement).classList.toggle("on", moveMode);
-  viewer.select(selected, moveMode);
-  if (moveMode && !selected) toast("Klicka på en del för att flytta den.");
+  viewer.select(selection, moveMode);
+  if (moveMode && !selection.length) toast("Klicka på en del för att flytta den – dubbelklicka för att ta hela facket/enheten.");
   renderParts();
 });
 $("#v-explode").addEventListener("input", (e) => viewer.setExplode(Number((e.target as HTMLInputElement).value)));
@@ -1049,8 +1150,8 @@ document.addEventListener("keydown", (e) => {
     return redo();
   }
   if (typing) return;
-  if (e.key === "Escape") return select(null, false);
-  if (!selected) return;
+  if (e.key === "Escape") return select(null, "replace", false);
+  if (!selection.length) return;
   if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
     return deleteSelected();
@@ -1062,11 +1163,7 @@ document.addEventListener("keydown", (e) => {
   const mv = moves[e.key];
   if (mv) {
     e.preventDefault();
-    commit(() => {
-      const p = state.design.parts.find((x) => x.id === selected);
-      if (p) p.pos[mv[0]] += mv[1];
-      state.design.edited = true;
-    });
+    moveParts(selection, { x: 0, y: 0, z: 0, [mv[0]]: mv[1] });
   }
 });
 

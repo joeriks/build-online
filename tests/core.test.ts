@@ -147,3 +147,24 @@ describe("spånskiva + reglar 45×45", () => {
     expect(sheets).toBeLessThan(plainSheets);
   });
 });
+
+describe("enheter (fack, gavlar, lådor)", () => {
+  it("spånskivehyllans fack innehåller hyllplan men inte gavlarna", () => {
+    const t = TEMPLATES.find((x) => x.id === "sheetShelf")!;
+    const ws = defaultWorkshop();
+    for (const studFrame of [false, true]) {
+      const d = t.build(ws, { ...paramsFromParsed(t, parsePrompt(t.example)), studFrame }, "");
+      const fack1 = d.parts.filter((p) => p.unit === "Fack 1");
+      expect(fack1.some((p) => /hylla|Hyllplan/.test(p.name))).toBe(true);
+      expect(fack1.some((p) => /Gavel|Stolpe/.test(p.name))).toBe(false);
+      expect(d.parts.some((p) => p.unit === "Gavel 1")).toBe(true);
+    }
+  });
+  it("byråns lådor är egna enheter med front", () => {
+    const t = TEMPLATES.find((x) => x.id === "dresser")!;
+    const d = t.build(defaultWorkshop(), paramsFromParsed(t, parsePrompt(t.example)), "");
+    const l1 = d.parts.filter((p) => p.unit === "Låda 1").map((p) => p.name);
+    expect(l1.some((n) => n.startsWith("Lådfront 1"))).toBe(true);
+    expect(l1.some((n) => n.startsWith("Löplist"))).toBe(false);
+  });
+});

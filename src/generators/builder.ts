@@ -11,7 +11,21 @@ export class Builder {
   hardware: Hardware[] = [];
   notes: string[] = [];
 
+  /** Enhet som nya delar tillhör (se `inUnit`) */
+  unit: string | null = null;
+
   constructor(public ws: Workshop) {}
+
+  /** Alla delar som skapas i `fn` tillhör enheten `name`. */
+  inUnit<T>(name: string, fn: () => T): T {
+    const prev = this.unit;
+    this.unit = name;
+    try {
+      return fn();
+    } finally {
+      this.unit = prev;
+    }
+  }
 
   has(tool: string) {
     return hasTool(this.ws, tool);
@@ -28,6 +42,7 @@ export class Builder {
       rot: { x: 0, y: 0, z: 0 },
       endCuts: [0, 0],
       group,
+      ...(this.unit ? { unit: this.unit } : {}),
       ...extra,
     };
     this.parts.push(p);
@@ -57,6 +72,7 @@ export class Builder {
       rot: plane === "xy" ? { x: 0, y: 0, z: 45 * dir } : { x: -45 * dir, y: 0, z: 0 },
       endCuts: [45, 45],
       group,
+      ...(this.unit ? { unit: this.unit } : {}),
     };
     this.parts.push(p);
     return p;

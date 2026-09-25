@@ -26,7 +26,7 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
   if (H > s.stockLength) b.note(`Gavlarna (${H} mm) är längre än skivan (${s.stockLength} mm) – sänk höjden eller skarva gavlarna.`);
 
   const xs = columns(W, t, maxSpan);
-  xs.forEach((x, i) => b.box(`Gavel ${i + 1}`, s, { x, y: 0, z: 0 }, { x: t, y: H, z: D }, "gavlar"));
+  xs.forEach((x, i) => b.inUnit(`Gavel ${i + 1}`, () => b.box(`Gavel ${i + 1}`, s, { x, y: 0, z: 0 }, { x: t, y: H, z: D }, "gavlar")));
 
   // Hyllnivåer (översida): botten på sockeln, topp i gavlarnas överkant
   const bottomY = plinth, topY = H - t;
@@ -38,6 +38,7 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
   for (let bay = 0; bay < xs.length - 1; bay++) {
     const x0 = xs[bay] + t, span = xs[bay + 1] - x0;
     const f = `${bay + 1}`;
+    b.unit = `Fack ${f}`;
     levels.forEach((y, i) => {
       const fx = isFixed(i);
       const name = i === 0 ? `Bottenhylla fack ${f}` : i === n - 1 ? `Topphylla fack ${f}` : `Hyllplan ${i} fack ${f}`;
@@ -50,6 +51,7 @@ export function sheetShelf(ws: Workshop, p: Design["params"], prompt: string): D
     b.box(`Sockel fack ${f}`, s, { x: x0, y: 0, z: D - t - 30 }, { x: span, y: plinth, z: t }, "sockel");
     b.box(`Fästlist fack ${f}`, s, { x: x0, y: topY - 100, z: 0 }, { x: span, y: 100, z: t }, "fästlist");
   }
+  b.unit = null;
   const bays = xs.length - 1;
   const spanMm = Math.round(xs[1] - xs[0] - t);
 
@@ -97,6 +99,7 @@ function withStuds(b: Builder, s: Material, p: Design["params"], prompt: string)
 
   // Stegar: bakre och främre stolpe per gavel
   xs.forEach((x, i) => {
+    b.unit = `Gavel ${i + 1}`;
     b.post(`Stolpe bak ${i + 1}`, m, { x, y: 0, z: 0 }, H, "stolpar", "z");
     b.post(`Stolpe fram ${i + 1}`, m, { x, y: 0, z: D - B }, H, "stolpar", "z");
   });
@@ -108,6 +111,7 @@ function withStuds(b: Builder, s: Material, p: Design["params"], prompt: string)
   for (let bay = 0; bay < xs.length - 1; bay++) {
     const x0 = xs[bay] + A, x1 = xs[bay + 1];
     const f = bay + 1;
+    b.unit = `Fack ${f}`;
     levels.forEach((y, i) => {
       const cy = Math.max(0, y - B);
       b.box(`Bärlist ${f}.${i + 1} V`, m, { x: x0, y: cy, z: 0 }, { x: A, y: y - cy, z: D }, "bärlister");
@@ -123,6 +127,7 @@ function withStuds(b: Builder, s: Material, p: Design["params"], prompt: string)
       edge += x1 - x0;
     });
   }
+  b.unit = null;
   const spanMm = Math.round(xs[1] - xs[0] - A);
 
   b.hw("Träskruv 5×80 (bärlist → stolpe, framkantslist)", cleats * 4 + fronts * 4);

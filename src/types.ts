@@ -43,6 +43,8 @@ export interface Part {
   endCuts: [number, number];
   /** Monteringsgrupp – kopplas till byggsteg */
   group: string;
+  /** Enhet som hör ihop och kan markeras/flyttas tillsammans, t.ex. "Fack 2" eller "Låda 1" */
+  unit?: string;
 }
 
 export interface Step {

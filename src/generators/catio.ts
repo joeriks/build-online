@@ -80,11 +80,13 @@ export function catio(ws: Workshop, p: Design["params"], prompt: string): Design
   if (door) {
     b.beamX("Dörröverstycke", m, { x: dl + A, y: doorH, z: D - A }, doorW, "dörr");
     const lx = dl + A + 5, lw = doorW - 10, ly = 15, lh = doorH - 20;
+    b.unit = "Dörrblad";
     b.box("Dörr – sidostycke V", m, { x: lx, y: ly, z: D - B }, { x: A, y: lh, z: B }, "dörr");
     b.box("Dörr – sidostycke H", m, { x: lx + lw - A, y: ly, z: D - B }, { x: A, y: lh, z: B }, "dörr");
     b.box("Dörr – underslå", m, { x: lx + A, y: ly, z: D - B }, { x: lw - 2 * A, y: A, z: B }, "dörr");
     b.box("Dörr – överslå", m, { x: lx + A, y: ly + lh - A, z: D - B }, { x: lw - 2 * A, y: A, z: B }, "dörr");
     if (mesh) b.box("Nät dörr", mesh, { x: lx, y: ly, z: D }, { x: lw, y: lh, z: 1 }, "nät");
+    b.unit = null;
     b.hw("Gångjärn", 2);
     b.hw("Haspe / kattsäker regel", 1);
   }
@@ -150,10 +152,13 @@ export function catio(ws: Workshop, p: Design["params"], prompt: string): Design
     if (Math.abs(y - midY) < B + 40) y = midY + B + 60;
     const bay = i % Math.max(1, bays);
     const x0 = backXs[bay] + A, x1 = backXs[bay + 1] ?? W - A;
+    b.unit = `Katthylla ${i + 1}`;
     b.box(`Hyllkonsol ${i + 1} V`, m, { x: x0, y: y - B, z: 0 }, { x: A, y: B, z: sd + A }, "hyllor");
     b.box(`Hyllkonsol ${i + 1} H`, m, { x: x1 - A, y: y - B, z: 0 }, { x: A, y: B, z: sd + A }, "hyllor");
     fillSurface(b, `Katthylla ${i + 1}`, "hyllor", x0 + 2, y, A, x1 - x0 - 4, sd, { gap: 4, minSheet: 12 });
   }
+
+  b.unit = null;
 
   // --- Beslag ---
   b.hw("Vinkelbeslag", rails * 2);
