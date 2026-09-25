@@ -73,6 +73,8 @@ export interface Design {
   wall: { width: number; height: number } | null;
   /** Sant om delar ändrats för hand (då genereras inte om automatiskt) */
   edited?: boolean;
+  /** Last på ytor (kg/m²) för hållfasthetsanalysen – annars förslag utifrån projekttyp */
+  loadKgM2?: number;
 }
 
 export interface Workshop {

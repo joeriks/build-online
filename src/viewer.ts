@@ -199,6 +199,35 @@ export class Viewer {
     return ((solid ?? hits[0])?.object.userData.id as string) ?? null;
   }
 
+  /** Färgkarta för hållfasthet: utnyttjandegrad per del (saknas = ej beräknad) */
+  private heat: Map<string, number> | null = null;
+
+  /** Färg efter utnyttjandegrad: grön < 50 %, gulgrön < 80 %, orange < 100 %, röd ≥ 100 % */
+  static heatColor(u: number): string {
+    return u >= 1 ? "#d8342c" : u >= 0.8 ? "#f0a020" : u >= 0.5 ? "#9cc43a" : "#2e9e5b";
+  }
+
+  private heatMaterial(u: number | undefined, mat: Material | undefined): THREE.MeshStandardMaterial {
+    const key = u == null ? `heat-none-${mat?.kind}` : `heat-${Viewer.heatColor(u)}`;
+    let m = this.matCache.get(key);
+    if (m) return m;
+    m = u == null
+      ? new THREE.MeshStandardMaterial({ color: this.dark ? 0x5a6069 : 0xc4c8cf, roughness: 0.9, transparent: true, opacity: mat?.kind === "mesh" ? 0.08 : 0.55, depthWrite: false })
+      : new THREE.MeshStandardMaterial({ color: Viewer.heatColor(u), roughness: 0.7 });
+    this.matCache.set(key, m);
+    return m;
+  }
+
+  /** Sätt färgkartan. `rebuild = false` när setDesign ändå anropas direkt efteråt. */
+  setHeatmap(heat: Map<string, number> | null, rebuild = true) {
+    this.heat = heat;
+    // färgerna för "ej beräknad" beror på temat – rensa cachen
+    for (const k of [...this.matCache.keys()]) if (k.startsWith("heat-none")) this.matCache.delete(k);
+    if (!rebuild) return;
+    if (this.design) this.setDesign(this.design, this.materials);
+    this.select([...this.selected], !!this.gizmo.object);
+  }
+
   private material(mat: Material | undefined): THREE.MeshStandardMaterial {
     const key = mat ? `${mat.id}|${mat.color}|${this.xray}` : "unknown";
     let m = this.matCache.get(key);
@@ -238,7 +267,7 @@ export class Viewer {
     for (const p of design.parts) {
       const mat = materials.find((m) => m.id === p.materialId);
       const geo = new THREE.BoxGeometry(Math.max(p.dims.x, 0.5) * S, Math.max(p.dims.y, 0.5) * S, Math.max(p.dims.z, 0.5) * S);
-      const material = this.material(mat);
+      const material = this.heat ? this.heatMaterial(this.heat.get(p.id), mat) : this.material(mat);
       if (mat && mat.kind !== "mesh" && material.map) {
         // skala texturen så ådringen följer delens längd ungefär
         const uv = geo.attributes.uv;

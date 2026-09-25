@@ -145,6 +145,8 @@ export interface SurfaceOpts {
   preferSheet?: boolean;
   minSheet?: number;
   label?: string;
+  /** Brädornas riktning: längs X (standard) eller Z – lägg dem alltid tvärs över stöden */
+  along?: "x" | "z";
 }
 
 /**
@@ -170,35 +172,37 @@ export function fillSurface(b: Builder, name: string, group: string, x0: number,
   }
   const board = pickBoard(b.ws);
   const m = board ?? pickFrame(b.ws);
+  const alongZ = opts.along === "z";
+  const across = alongZ ? lx : lz; // bredden som fylls med brädor
+  const long = alongZ ? lz : lx; // brädornas längd
   const w = m.b; // bredsidan uppåt
-  let n = Math.max(1, Math.floor((lz + gap) / (w + gap)));
-  let pieceW = w;
-  let g = n > 1 ? (lz - n * w) / (n - 1) : 0;
-  if (n * w > lz) {
+  let n = Math.max(1, Math.floor((across + gap) / (w + gap)));
+  let g = n > 1 ? (across - n * w) / (n - 1) : 0;
+  if (n * w > across) {
     n = 1;
     g = 0;
   }
   // Om det blir en stor lucka och vi kan klyva – lägg till en klyvd bit
   let ripped = 0;
   if (g > gap * 2.5 && (b.has("bordssag") || b.has("cirkelsag"))) {
-    const rest = lz - n * (w + gap);
+    const rest = across - n * (w + gap);
     if (rest > 30) {
       ripped = Math.round(rest);
       g = gap;
     }
   }
-  const segs = Math.ceil(lx / m.stockLength);
-  const segL = lx / segs;
-  let z = z0;
+  const segs = Math.ceil(long / m.stockLength);
+  const segL = long / segs;
+  const put = (label: string, c: number, s: number, width: number) =>
+    alongZ
+      ? b.box(label, m, { x: x0 + c, y: y0, z: z0 + s * segL }, { x: width, y: m.a, z: segL }, group)
+      : b.box(label, m, { x: x0 + s * segL, y: y0, z: z0 + c }, { x: segL, y: m.a, z: width }, group);
+  let c = 0;
   for (let i = 0; i < n; i++) {
-    for (let s = 0; s < segs; s++)
-      b.box(`${name} – ${board ? "bräda" : "ribba"} ${i + 1}${segs > 1 ? String.fromCharCode(97 + s) : ""}`, m, { x: x0 + s * segL, y: y0, z }, { x: segL, y: m.a, z: pieceW }, group);
-    z += pieceW + g;
+    for (let s = 0; s < segs; s++) put(`${name} – ${board ? "bräda" : "ribba"} ${i + 1}${segs > 1 ? String.fromCharCode(97 + s) : ""}`, c, s, w);
+    c += w + g;
   }
-  if (ripped) {
-    for (let s = 0; s < segs; s++)
-      b.box(`${name} – klyvd bit`, m, { x: x0 + s * segL, y: y0, z }, { x: segL, y: m.a, z: ripped }, group);
-  }
+  if (ripped) for (let s = 0; s < segs; s++) put(`${name} – klyvd bit`, c, s, ripped);
   if (segs > 1) b.note(`${name}: delarna är längre än säljlängden och skarvas – lägg skarvarna över ett stöd.`);
   if (!board) b.note(`${name} görs av ${m.name} med bredsidan upp eftersom inga brädor eller skivor är tillgängliga.`);
   return { thickness: m.a, kind: board ? "board" : "slat" };

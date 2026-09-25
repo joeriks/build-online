@@ -155,6 +155,8 @@ export function catio(ws: Workshop, p: Design["params"], prompt: string): Design
     b.unit = `Katthylla ${i + 1}`;
     b.box(`Hyllkonsol ${i + 1} V`, m, { x: x0, y: y - B, z: 0 }, { x: A, y: B, z: sd + A }, "hyllor");
     b.box(`Hyllkonsol ${i + 1} H`, m, { x: x1 - A, y: y - B, z: 0 }, { x: A, y: B, z: sd + A }, "hyllor");
+    // Framkantslist mellan konsolerna så hyllan inte sviktar när katten hoppar upp
+    if (x1 - x0 - 2 * A > 150) b.box(`Framkantslist ${i + 1}`, m, { x: x0 + A, y: y - B, z: A + sd - A }, { x: x1 - x0 - 2 * A, y: B, z: A }, "hyllor");
     fillSurface(b, `Katthylla ${i + 1}`, "hyllor", x0 + 2, y, A, x1 - x0 - 4, sd, { gap: 4, minSheet: 12 });
   }
 

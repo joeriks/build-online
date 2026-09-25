@@ -7,6 +7,7 @@ import { parsePrompt, paramsFromParsed, type Parsed } from "./parse";
 import { bounds, checkDesign, cutList, partShape, purchases, type Warning } from "./analysis";
 import { Viewer } from "./viewer";
 import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
+import { LOAD_PRESETS, analyzeStrength, defaultLoad, type MemberResult, type StrengthReport } from "./strength";
 
 // ---------------------------------------------------------------- state
 
@@ -143,8 +144,11 @@ function slug(s: string) {
 
 function regenerate(t: Template, params: Design["params"], prompt: string) {
   const title = state.customTitle ? state.design.title : null;
+  // Behåll vald last för hållfasthetsanalysen när samma mall byggs om
+  const load = state.design.templateId === t.id ? state.design.loadKgM2 : undefined;
   const d = t.build(state.ws, params, prompt);
   if (title) d.title = title;
+  if (load != null) d.loadKgM2 = load;
   state.design = d;
   stepIdx = -1;
 }
@@ -296,7 +300,8 @@ function renderBuild() {
     if (lastParsed.template) bits.push(`<strong>${esc(lastParsed.template.name)}</strong>`);
     const names: Record<string, string> = { width: "bredd", height: "höjd", depth: "djup", length: "längd" };
     for (const [k, v] of Object.entries(lastParsed.dims)) bits.push(`${names[k]} ${fmt(v!)} mm`);
-    if (lastParsed.count != null && lastParsed.template?.params.some((p) => ["shelves", "drawers"].includes(p.key))) bits.push(`antal ${lastParsed.count}`);
+    if (lastParsed.count != null && lastParsed.template?.params.some((p) => ["shelves", "drawers", "levels"].includes(p.key))) bits.push(`antal ${lastParsed.count}`);
+    if (lastParsed.hole != null && lastParsed.template?.id === "birdHouse") bits.push(`hål Ø${lastParsed.hole} mm`);
     if (lastParsed.againstWall != null) bits.push(lastParsed.againstWall ? "mot vägg" : "fristående");
     if (lastParsed.door != null) bits.push(lastParsed.door ? "med dörr" : "utan dörr");
     interp = `<div class="interp">Tolkat: ${bits.join(" · ") || "<em>inget känt</em>"}</div>`;
@@ -606,11 +611,17 @@ function renderOverview() {
     <div class="small muted">Yttermått (B × D × H): <span class="num">${size}</span></div>
     ${warnings.length ? `<h3>Kontroll av material & verktyg</h3>${warnings.map((w, i) => `
       <div class="warn-item ${w.level}" data-warn="${i}"><span>${w.level === "error" ? "⛔" : w.level === "warn" ? "⚠️" : "ℹ️"}</span><span>${esc(w.text)}</span>${w.partIds.length ? `<span class="cnt">${w.partIds.length} del${w.partIds.length > 1 ? "ar" : ""}</span>` : ""}</div>`).join("")}` : d.parts.length ? `<h3>Kontroll</h3><div class="warn-item info">✅ Allt kan byggas med dina material och verktyg.</div>` : ""}
+    ${strength && strength.members.length ? (() => {
+      const over = strength.members.filter((m) => m.util > 1).length;
+      const u = strength.worst!.util;
+      return `<h3>Hållfasthet</h3><div class="warn-item ${over ? "error" : u > 0.8 ? "warn" : "info"}" data-goto="strength"><span>${over ? "⛔" : u > 0.8 ? "⚠️" : "✅"}</span><span>${over ? `För svagt på ${over} ställe${over > 1 ? "n" : ""}` : u > 0.8 ? "Håller, men nära gränsen" : "Håller"} vid ${strength.loadKgM2} kg/m² – högsta utnyttjande ${Math.round(u * 100)} %.</span><span class="cnt">Visa →</span></div>`;
+    })() : ""}
     ${d.notes.length ? `<h3>Att tänka på</h3><ul class="notes">${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
     ${d.hardware.length ? `<h3>Skruv & beslag (ca)</h3><table class="tbl">${d.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="r">${fmt(h.qty)} ${esc(h.unit)}</td></tr>`).join("")}</table>` : ""}`;
 }
 
 body("overview").addEventListener("click", (e) => {
+  if ((e.target as HTMLElement).closest("[data-goto]")) return switchTab("right", "strength");
   const w = (e.target as HTMLElement).closest<HTMLElement>("[data-warn]");
   if (!w) return;
   const ids = warnings[+w.dataset.warn!]?.partIds ?? [];
@@ -950,6 +961,99 @@ $("#stepbar").addEventListener("click", (e) => {
   renderSteps();
 });
 
+// ---------------------------------------------------------------- render: Hållfasthet
+
+let strength: StrengthReport | null = null;
+let heatOn = false;
+const pct = (u: number) => `${Math.round(u * 100)} %`;
+
+/** Slå ihop likadana resultat (t.ex. 24 identiska hyllplan) till en rad. */
+function groupMembers(list: MemberResult[]) {
+  const groups = new Map<string, MemberResult[]>();
+  for (const m of list) {
+    const base = m.name.replace(/[\s–-]*(\d+[a-z]?(\.\d+)?|[VH])(\s|$)/g, " ").replace(/\s+/g, " ").trim();
+    const key = [base, m.kind, m.materialName, m.span, m.deflection, Math.round(m.util * 100)].join("|");
+    groups.set(key, [...(groups.get(key) ?? []), m]);
+  }
+  return [...groups.values()];
+}
+
+function renderStrength() {
+  const el = body("strength");
+  const d = state.design;
+  const r = strength;
+  if (!r || !d.parts.length) return void (el.innerHTML = `<p class="muted">Inga delar ännu.</p>`);
+  const suggested = defaultLoad(d.templateId);
+  const over = r.members.filter((m) => m.util > 1);
+  const near = r.members.filter((m) => m.util > 0.8 && m.util <= 1);
+  const worst = r.worst;
+  const status = over.length
+    ? `<div class="status error"><strong>För svagt på ${over.length} ställe${over.length > 1 ? "n" : ""}</strong>Högsta utnyttjande ${pct(worst!.util)} (${esc(worst!.name)}). Se förslagen nedan.</div>`
+    : near.length
+      ? `<div class="status warn"><strong>Håller – men nära gränsen</strong>Högsta utnyttjande ${pct(worst!.util)} (${esc(worst!.name)}).</div>`
+      : `<div class="status ok"><strong>Håller</strong>${worst ? `Högsta utnyttjande ${pct(worst.util)} (${esc(worst.name)}).` : "Inga bärande delar att räkna på."}</div>`;
+  const groups = groupMembers(r.members).slice(0, 40);
+  const color = (u: number) => (u >= 1 ? "#d8342c" : u >= 0.8 ? "#f0a020" : u >= 0.5 ? "#9cc43a" : "#2e9e5b");
+  const rows = groups.map((g, gi) => {
+    const m = g[0];
+    const what = m.kind === "stolpe" ? "tryck" : m.uConn >= Math.max(m.uBend, m.uDefl) && m.uConn > 0 ? "infästning" : m.uDefl >= m.uBend ? "svikt" : "böjning";
+    const sub = [
+      m.kind === "stolpe" ? `stolpe ${fmt(m.span)} mm` : `spann ${fmt(m.span)} mm${m.cantilever ? ` (utkragning ${fmt(m.cantilever)})` : ""}`,
+      m.kind !== "stolpe" ? `svikt ${m.deflection} mm (max ${m.limit})` : "",
+      m.maxKg != null ? `tål ca ${fmt(m.maxKg)} kg (${fmt(m.maxKgM2!)} kg/m²)` : "",
+    ].filter(Boolean).join(" · ");
+    return `<tr class="click" data-sg="${gi}">
+      <td>${esc(m.name)}${g.length > 1 ? ` <span class="tag">×${g.length}</span>` : ""}<div class="small muted">${esc(m.materialName)} · ${sub}</div>${m.advice ? `<div class="advice">${esc(m.advice)}</div>` : ""}</td>
+      <td style="width:110px"><div class="small r num" style="text-align:right">${pct(m.util)} <span class="muted">${what}</span></div><div class="ubar ${m.util > 1 ? "over" : ""}"><span style="width:${Math.min(100, m.util * 100)}%;background:${color(m.util)}"></span></div></td>
+    </tr>`;
+  }).join("");
+  el.innerHTML = `
+    <h3 style="margin-top:0">Last på ytor</h3>
+    <div class="load-row"><input type="number" id="load" value="${r.loadKgM2}" min="0" max="2000" step="10"/> <span>kg/m²</span>
+      ${d.loadKgM2 != null && d.loadKgM2 !== suggested ? `<button class="btn ghost small" data-load="${suggested}">Återställ (${suggested})</button>` : `<span class="small muted">förslag för projektet</span>`}</div>
+    <div class="actions" style="margin-top:8px">${LOAD_PRESETS.map((p) => `<button class="chip ${p.kg === r.loadKgM2 ? "on" : ""}" data-load="${p.kg}">${p.label} ${p.kg}</button>`).join("")}</div>
+    <p class="small muted">Lasten läggs på allt man ställer saker på – hyllplan, sitsar, lock, trall – och förs ned genom konstruktionen.</p>
+    ${status}
+    <div class="warn-item ${r.tipping.level === "warn" ? "warn" : "info"}"><span>${r.tipping.level === "warn" ? "⚠️" : "↕"}</span><span>${esc(r.tipping.text)}</span></div>
+    ${r.unsupported.length ? `<div class="warn-item warn"><span>⚠️</span><span>Delar utan stöd: ${esc(r.unsupported.slice(0, 5).join(", "))}${r.unsupported.length > 5 ? " …" : ""}</span></div>` : ""}
+    <label class="switch" style="margin-top:10px"><input type="checkbox" id="heat" ${heatOn ? "checked" : ""}/> Visa utnyttjandegrad i 3D</label>
+    <div class="legend"><span><i style="background:#2e9e5b"></i>&lt; 50 %</span><span><i style="background:#9cc43a"></i>50–80 %</span><span><i style="background:#f0a020"></i>80–100 %</span><span><i style="background:#d8342c"></i>&gt; 100 %</span></div>
+    <h3>Delar (${r.members.length})</h3>
+    ${rows ? `<table class="tbl">${rows}</table>` : `<p class="muted">Inga liggande delar att räkna på.</p>`}
+    <p class="small muted">Förenklad kontroll med ungefärliga värden för C24/C18-virke, spånskiva, plywood och OSB: böjning, svikt (L/${d.templateId === "deck" || d.templateId === "woodShed" ? 300 : 200} efter krypning) och skruvinfästningar (2 skruvar per anslutning). Den ersätter inte en konstruktionsberäkning för bärande konstruktioner som altaner högt över mark.</p>`;
+  (el as HTMLElement & { _groups?: MemberResult[][] })._groups = groups;
+}
+
+const strengthEl = body("strength");
+strengthEl.addEventListener("click", (e) => {
+  const tgt = e.target as HTMLElement;
+  const lb = tgt.closest<HTMLElement>("[data-load]");
+  if (lb) return setLoad(Number(lb.dataset.load));
+  const row = tgt.closest<HTMLElement>("[data-sg]");
+  if (row) {
+    const g = (strengthEl as HTMLElement & { _groups?: MemberResult[][] })._groups?.[+row.dataset.sg!];
+    if (g) {
+      selection = [];
+      viewer.select([], false);
+      viewer.setHighlight(g.map((m) => m.id));
+    }
+  }
+});
+strengthEl.addEventListener("change", (e) => {
+  const tgt = e.target as HTMLInputElement;
+  if (tgt.id === "load") setLoad(Number(tgt.value));
+  if (tgt.id === "heat") {
+    heatOn = tgt.checked;
+    viewer.setHeatmap(heatOn && strength ? new Map(strength.members.map((m) => [m.id, m.util])) : null);
+    applySteps();
+  }
+});
+
+function setLoad(kg: number) {
+  if (!Number.isFinite(kg) || kg < 0) return;
+  commit(() => (state.design.loadKgM2 = kg), { keepBuild: true });
+}
+
 // ---------------------------------------------------------------- render: allt
 
 function setBadge() {
@@ -957,11 +1061,15 @@ function setBadge() {
   const errs = warnings.filter((w) => w.level === "error").length;
   const warns = warnings.filter((w) => w.level === "warn").length;
   btn.innerHTML = `Översikt${errs ? `<span class="badge">${errs}</span>` : warns ? `<span class="badge warn">${warns}</span>` : ""}`;
+  const over = strength?.members.filter((m) => m.util > 1).length ?? 0;
+  $(`[data-tabs="right"] [data-tab="strength"]`).innerHTML = `Hållfasthet${over ? `<span class="badge">${over}</span>` : ""}`;
 }
 
 function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   const d = state.design;
   warnings = checkDesign(d, state.ws);
+  strength = analyzeStrength(d, state.ws);
+  viewer.setHeatmap(heatOn ? new Map(strength.members.map((m) => [m.id, m.util])) : null, false);
   const title = $("#title") as HTMLInputElement;
   if (document.activeElement !== title) title.value = d.title;
   viewer.setDesign(d, state.ws.materials, opts.fit);
@@ -975,6 +1083,7 @@ function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   renderCuts();
   renderBuy();
   renderSteps();
+  renderStrength();
   setBadge();
   $("#empty").hidden = d.parts.length > 0;
   ($("#undo") as HTMLButtonElement).disabled = !undoStack.length;

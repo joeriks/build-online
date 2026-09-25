@@ -35,7 +35,7 @@ export function workbench(ws: Workshop, p: Design["params"], prompt: string): De
     // Reglar på benens insida – då kan hyllan gå hel förbi mittbenen
     b.beamX("Hyllregel fram", m, { x: over, y, z: zF - A }, fw, "underhylla", true);
     b.beamX("Hyllregel bak", m, { x: over, y, z: zB + B }, fw, "underhylla", true);
-    fillSurface(b, "Underhylla", "underhylla", over, y + B, zB + B, fw, zF - zB - B, { minSheet: 12 });
+    fillSurface(b, "Underhylla", "underhylla", over, y + B, zB + B, fw, zF - zB - B, { minSheet: 12, along: "z" });
   }
   b.unit = "Bänkskiva";
   for (let l = 0; l < layers; l++)

@@ -4,6 +4,7 @@ import { catio } from "./catio";
 import { bench, raisedBed, workbench } from "./furniture";
 import { dresser, penHolder } from "./cabinet";
 import { sheetShelf } from "./sheetShelf";
+import { birdHouse, catLitterBench, chest, coffeeTable, deck, sandbox, shoeRack, woodShed } from "./more";
 
 export interface ParamDef {
   key: string;
@@ -95,6 +96,73 @@ export const TEMPLATES: Template[] = [
     example: "Bygg en odlingslåda 1,2 × 0,8 m",
     params: [mm("width", "Längd", 1200, 400, 3000), mm("depth", "Bredd", 800, 300, 1500), mm("height", "Höjd", 400, 100, 900)],
     build: raisedBed,
+  },
+  {
+    id: "birdHouse", name: "Fågelholk", icon: "🐦",
+    match: /fågelholk|fågelhus|fågelbo|holk/i,
+    example: "Bygg en fågelholk för talgoxe med 32 mm hål",
+    params: [mm("floor", "Bottenmått (invändigt)", 120, 90, 200, 5), mm("height", "Höjd fram", 220, 150, 350, 5), mm("hole", "Ingångshål Ø", 32, 25, 60, 1)],
+    build: birdHouse,
+  },
+  {
+    id: "woodShed", name: "Vedförråd", icon: "🪵",
+    match: /vedförråd|vedskjul|vedbod|vedstapel|vedhylla|vedställ|vedtak/i,
+    priority: 1,
+    example: "Bygg ett vedförråd 2 m brett och 80 cm djupt",
+    params: [mm("width", "Bredd", 2000, 800, 4000), mm("depth", "Djup", 800, 400, 1500), mm("height", "Höjd fram", 1900, 1000, 2400)],
+    build: woodShed,
+  },
+  {
+    id: "sandbox", name: "Sandlåda", icon: "🏖️",
+    match: /sandlåda|sandlåd/i,
+    priority: 1,
+    example: "Bygg en sandlåda 1,5 × 1,5 m med sittkant",
+    params: [mm("width", "Bredd", 1500, 800, 3000), mm("depth", "Djup", 1500, 800, 3000), mm("height", "Höjd", 290, 140, 500, 5)],
+    build: sandbox,
+  },
+  {
+    id: "shoeRack", name: "Skohylla", icon: "👟",
+    match: /skohyll|skoställ|skoförvaring|skobänk/i,
+    priority: 1,
+    example: "Bygg en skohylla 80 cm bred med 3 nivåer",
+    params: [mm("width", "Bredd", 800, 400, 1600), mm("depth", "Djup", 300, 200, 400), mm("height", "Höjd", 600, 300, 1200),
+      { key: "levels", label: "Nivåer", type: "number", min: 1, max: 6, step: 1, default: 3 }],
+    build: shoeRack,
+  },
+  {
+    id: "chest", name: "Förvaringskista", icon: "🧰",
+    match: /kista|förvaringslåda|leksakslåda|dynbox|dynlåda|förvaringsbox/i,
+    priority: 1,
+    example: "Bygg en förvaringskista med lock, 90 cm bred",
+    params: [mm("width", "Bredd", 900, 400, 1800), mm("depth", "Djup", 450, 300, 800), mm("height", "Höjd", 450, 250, 800)],
+    build: chest,
+  },
+  {
+    id: "deck", name: "Trädäck / altan", icon: "🏡",
+    match: /trädäck|altan|terrass|uteplats|trall(?:däck|golv)/i,
+    example: "Bygg ett trädäck 3 x 2 m, 40 cm högt",
+    params: [mm("width", "Bredd", 3000, 1000, 8000, 50), mm("depth", "Djup", 2000, 800, 5000, 50), mm("height", "Höjd", 300, 150, 1200, 10)],
+    build: deck,
+  },
+  {
+    id: "coffeeTable", name: "Soffbord", icon: "☕",
+    match: /soffbord|sidobord|kaffebord|vardagsrumsbord/i,
+    priority: 1,
+    example: "Bygg ett soffbord 110 × 60 cm med hylla under",
+    params: [mm("width", "Längd", 1100, 400, 2000), mm("depth", "Bredd", 600, 300, 1000), mm("height", "Höjd", 450, 300, 700),
+      { key: "lowerShelf", label: "Hylla under", type: "bool", default: true }],
+    build: coffeeTable,
+  },
+  {
+    id: "catLitterBench", name: "Sittbänk med kattlåda", icon: "🐾",
+    match: /kattlåd|kattoalett|kattsand|kattlådebänk/i,
+    priority: 2,
+    example: "Bygg en sittbänk med box för kattlåda, 1 m lång",
+    params: [mm("width", "Längd", 1000, 600, 2000), mm("depth", "Djup", 500, 380, 700), mm("height", "Sitthöjd", 480, 380, 600),
+      mm("litterW", "Kattlådans längd", 500, 300, 700), mm("litterD", "Kattlådans bredd", 400, 250, 550),
+      { key: "entranceLeft", label: "Ingång i vänster gavel (annars höger)", type: "bool", default: false },
+      { key: "divider", label: "Förvaringsfack bredvid", type: "bool", default: true }],
+    build: catLitterBench,
   },
   {
     id: "bench", name: "Sittbänk", icon: "🪑",

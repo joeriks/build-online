@@ -37,8 +37,32 @@ Mallarna anpassar sig automatiskt:
 | ✏️ Pennställ med låda | "pennställ med låda, 22 cm brett" |
 | 🌱 Odlingslåda | "odlingslåda 1,2 × 0,8 m" |
 | 🪑 Sittbänk | "sittbänk 1,4 m lång" |
+| 🐾 Sittbänk med kattlåda | "sittbänk med box för kattlåda, 1 m lång" – ingång i gaveln, lyftbart sitslock, förvaringsfack |
+| 🐦 Fågelholk | "fågelholk för blåmes" eller "… med 32 mm hål" |
+| 🪵 Vedförråd | "vedförråd 2 m brett och 80 cm djupt" |
+| 🏖️ Sandlåda | "sandlåda 1,5 × 1,5 m med sittkant" |
+| 👟 Skohylla | "skohylla 80 cm bred med 3 nivåer" |
+| 🧰 Förvaringskista | "dynbox/förvaringskista med lock, 90 cm bred" |
+| 🏡 Trädäck / altan | "trädäck 3 x 2 m, 40 cm högt" |
+| ☕ Soffbord | "soffbord 110 × 60 cm med hylla under" |
 
 Mått, antal och alternativ kan sedan justeras med reglage.
+
+## Hållfasthet
+
+Fliken **Hållfasthet** räknar ut om konstruktionen bär:
+
+- appen hittar själv vad som vilar på vad (hyllplan på lister, trall på reglar, reglar på bärlinor …)
+  och för lasten nedåt genom konstruktionen
+- varje liggande del kontrolleras för **böjning**, **svikt** (L/200, L/300 för däck och förråd, med
+  krypning – spånskiva kryper mycket) och **skruvinfästning** när en del hänger i skruv
+- stolpar och gavlar kontrolleras för tryck/knäckning, och hela konstruktionen för **tipprisk**
+- välj last (kg/m²) – t.ex. *Böcker 150*, *Sittyta 300*, *Ved/förråd 400* – och se **utnyttjandegrad**
+  per del, hur mycket varje hylla tål i kg och förslag som "minska spannet till ca 580 mm"
+- slå på färgkartan för att se svaga delar i 3D (grönt → rött)
+
+Beräkningen är förenklad (ungefärliga värden för C24/C18, spånskiva, plywood och OSB) och ersätter
+inte en konstruktionsberäkning för bärande konstruktioner som höga altaner.
 
 ## Fri redigering
 
@@ -73,6 +97,7 @@ Koden i korthet:
 - `src/generators/` – mallarna (parametriska byggen) och `builder.ts` med materialval
 - `src/parse.ts` – tolkar fritext ("2,5 meter bred", "fyra lådor", "mot huset")
 - `src/analysis.ts` – kapningslista, kapoptimering, skivschema och verktygskontroll
+- `src/strength.ts` – hållfasthetsanalys (last, böjning, svikt, infästningar, tipprisk)
 - `src/viewer.ts` – 3D-vyn
 - `src/ai.ts` – AI-generering via Claude
 - `src/main.ts` – gränssnittet

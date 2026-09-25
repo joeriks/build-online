@@ -56,8 +56,8 @@ describe("generatorer", () => {
     const ws = defaultWorkshop();
     ws.materials.forEach((m) => (m.available = m.id === "regel-45x45"));
     ws.tools.forEach((t) => (t.available = ["handsag", "skruvdragare"].includes(t.id)));
-    // Spånskivehyllan är per definition byggd av skivor
-    for (const t of TEMPLATES.filter((x) => x.id !== "sheetShelf")) {
+    // Spånskivehyllan är av skivor och trädäcket kräver trall och grövre virke
+    for (const t of TEMPLATES.filter((x) => !["sheetShelf", "deck"].includes(x.id))) {
       const d = t.build(ws, paramsFromParsed(t, parsePrompt(t.example)), "");
       expect(d.parts.every((p) => p.materialId === "regel-45x45" || ws.materials.find((m) => m.id === p.materialId)!.kind === "mesh")).toBe(true);
     }
@@ -196,5 +196,104 @@ describe("stegehylla med hela skivor", () => {
     expect(lvl1.length).toBe(2);
     expect(lvl1.every((p) => p.dims.x <= 2500)).toBe(true);
     expect(checkDesign(d, ws).filter((w) => w.level === "error")).toEqual([]);
+  });
+});
+
+describe("nya projekt", () => {
+  it("känns igen i fritext", () => {
+    const cases: [string, string][] = [
+      ["bygg en fågelholk för blåmes", "birdHouse"],
+      ["vedförråd 2 m brett", "woodShed"],
+      ["sandlåda med sittkant", "sandbox"],
+      ["skohylla med 4 nivåer", "shoeRack"],
+      ["dynbox till altanen", "chest"],
+      ["trädäck 3 x 2 m", "deck"],
+      ["soffbord med hylla", "coffeeTable"],
+      ["sittbänk med box för kattlåda", "catLitterBench"],
+      ["katt-patio mot huset", "catio"],
+      ["sittbänk 1,4 m", "bench"],
+    ];
+    for (const [text, id] of cases) expect([text, parsePrompt(text).template?.id]).toEqual([text, id]);
+    expect(parsePrompt("fågelholk med 28 mm hål").hole).toBe(28);
+    expect(parsePrompt("fågelholk för talgoxe").hole).toBe(32);
+  });
+  it("kattlådefacket rymmer kattlådan", () => {
+    const t = TEMPLATES.find((x) => x.id === "catLitterBench")!;
+    const d = t.build(defaultWorkshop(), paramsFromParsed(t, parsePrompt(t.example)), "");
+    expect(d.notes.some((n) => n.includes("får knappt plats"))).toBe(false);
+    expect(d.parts.filter((p) => p.unit === "Sitslock").length).toBeGreaterThan(1);
+  });
+});
+
+import { analyzeStrength, matProps } from "../src/strength";
+import type { Design, Part } from "../src/types";
+describe("hållfasthet", () => {
+  const box = (id: string, materialId: string, min: [number, number, number], size: [number, number, number]): Part => ({
+    id, name: id, materialId, dims: { x: size[0], y: size[1], z: size[2] },
+    pos: { x: min[0] + size[0] / 2, y: min[1] + size[1] / 2, z: min[2] + size[2] / 2 }, rot: { x: 0, y: 0, z: 0 }, endCuts: [0, 0], group: "g",
+  });
+  const design = (parts: Part[], load: number): Design => ({ title: "t", prompt: "", templateId: null, params: {}, parts, steps: [], hardware: [], notes: [], wall: null, loadKgM2: load });
+
+  it("fritt upplagd bräda ger samma nedböjning som handräkning", () => {
+    const ws = defaultWorkshop();
+    // Bräda 22×95, 1000 mm, vilar på två reglar 45×45 med 955 mm mellan mitten på stöden
+    const parts = [
+      box("stod1", "regel-45x45", [0, 0, 0], [45, 400, 45]),
+      box("stod2", "regel-45x45", [955, 0, 0], [45, 400, 45]),
+      box("brada", "bord-22x95", [0, 400, 0], [1000, 22, 95]),
+    ];
+    const r = analyzeStrength(design(parts, 100), ws);
+    const m = r.members.find((x) => x.id === "brada")!;
+    const pr = matProps(ws.materials.find((x) => x.id === "bord-22x95")!)!;
+    const L = 977.5; // mitt på stöd 1 (22,5) till mitt på stöd 2 (977,5) … = 955
+    const Ls = 955;
+    const w = (100 * 9.81 * 95) / 1e6 + (pr.rho * 9.81 * 95 * 22) / 1e9;
+    const EI = (pr.E * 95 * 22 ** 3) / 12;
+    const expected = ((5 * w * Ls ** 4) / (384 * EI)) * (1 + pr.kdef * 0.3);
+    void L;
+    expect(m.span).toBe(955);
+    expect(m.deflection).toBeCloseTo(expected, 0);
+    // dubbla lasten ger ungefär dubbla utnyttjandet
+    const r2 = analyzeStrength(design(parts, 200), ws);
+    expect(r2.members.find((x) => x.id === "brada")!.uDefl / m.uDefl).toBeGreaterThan(1.8);
+  });
+
+  it("konsol (bara ett stöd) räknas som utkragning och infästning kontrolleras", () => {
+    const ws = defaultWorkshop();
+    const parts = [
+      box("stolpe", "regel-45x45", [0, 0, 0], [45, 1000, 45]),
+      box("konsol", "regel-45x45", [45, 900, 0], [45, 45, 400]),
+    ];
+    const r = analyzeStrength(design(parts, 100), ws);
+    const k = r.members.find((x) => x.id === "konsol")!;
+    expect(k.cantilever).toBeGreaterThan(300);
+    expect(k.uConn).toBeGreaterThan(0);
+  });
+
+  it("alla mallar bär sina delar – inget svävar fritt", () => {
+    for (const t of TEMPLATES) {
+      const ws = defaultWorkshop();
+      const d = t.build(ws, paramsFromParsed(t, parsePrompt(t.example)), t.example);
+      expect([t.id, analyzeStrength(d, ws).unsupported]).toEqual([t.id, []]);
+    }
+  });
+
+  it("trädäcket räknar trall, reglar och bärlinor och pinnar i stegehyllan får last", () => {
+    const ws = defaultWorkshop();
+    const deck = TEMPLATES.find((x) => x.id === "deck")!;
+    const r = analyzeStrength(deck.build(ws, paramsFromParsed(deck, parsePrompt(deck.example)), ""), ws);
+    for (const name of ["Trall", "Regel", "Bärlina"]) expect([name, r.members.some((m) => m.name.startsWith(name))]).toEqual([name, true]);
+    const shelf = TEMPLATES.find((x) => x.id === "sheetShelf")!;
+    const d = shelf.build(ws, { width: 2500, height: 2500, depth: 500, shelves: 6, maxSpan: 800, fullBoards: true }, "");
+    const pin = analyzeStrength(d, ws).members.find((m) => m.name.startsWith("Pinne"))!;
+    expect(pin.util).toBeGreaterThan(0.02);
+  });
+
+  it("stegehyllan med hela skivor klarar mer än skivgavlar med samma fackbredd", () => {
+    const t = TEMPLATES.find((x) => x.id === "sheetShelf")!;
+    const ws = defaultWorkshop();
+    const base = { width: 2500, height: 2500, depth: 500, shelves: 6, maxSpan: 800, adjustable: false, studFrame: false };
+    const worst = (extra: object) => analyzeStrength(t.build(ws, { ...base, ...extra }, ""), ws).worst!.util;
+    expect(worst({ fullBoards: true })).toBeLessThan(worst({ fullBoards: false }));
   });
 });

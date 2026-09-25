@@ -21,7 +21,7 @@ function drawerBox(b: Builder, label: string, mat: Material, t: number, bottom: 
  * Tjocklek för panelmaterialet. Grovt virke klyvs tunnare om bordssåg/cirkelsåg finns,
  * annars används virkets tjocklek som den är.
  */
-function panelThickness(b: Builder, mat: Material, target: number): number {
+export function panelThickness(b: Builder, mat: Material, target: number): number {
   if (mat.kind !== "linear" || mat.a <= target + 8) return mat.a;
   if (b.has("bordssag") || b.has("cirkelsag")) {
     b.note(`${mat.name} klyvs till ${target} mm tjocka remsor på ${b.has("bordssag") ? "bordssågen" : "cirkelsågen"} och limmas till paneler.`);

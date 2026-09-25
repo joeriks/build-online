@@ -10,6 +10,7 @@ export function defaultMaterials(): Material[] {
     lin("regel-45x45", "Regel 45×45", 45, 45, 3600, 55, "#d9b779"),
     lin("regel-45x70", "Regel 45×70", 45, 70, 3600, 75, "#d6b273", false),
     lin("regel-45x95", "Regel 45×95", 45, 95, 3600, 95, "#d3ad6c"),
+    lin("regel-45x145", "Konstruktionsvirke 45×145", 45, 145, 4800, 190, "#cfa866", false),
     lin("bord-22x95", "Bräda 22×95", 22, 95, 3600, 60, "#e2c48e"),
     lin("bord-22x145", "Bräda 22×145", 22, 145, 3600, 90, "#e0c089", false),
     lin("lakt-28x70", "Läkt 28×70", 28, 70, 3600, 40, "#cfa968", false),

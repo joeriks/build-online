@@ -44,6 +44,8 @@ export interface Parsed {
   studs: boolean;
   /** Texten vill ha hela skivor som hyllplan genom stegar */
   fullBoards: boolean;
+  /** Fågelholkens ingångshål (mm) */
+  hole: number | null;
 }
 
 const MAT_NOUN = String.raw`(?:spånskiv|spånplatt|skiv|bräd|regl|regel|läkt|plank|virke|plywood|osb|trall)\p{L}*`;
@@ -115,9 +117,17 @@ export function parsePrompt(text: string): Parsed {
 
   const studs = /regel|reglar|regelvirke|45\s*[x×]\s*45/.test(raw);
 
+  // Fågelholk: "32 mm hål", "hål på 28 mm", eller fågelart
+  let hole: number | null = null;
+  const h1 = /(\d+)\s*mm\s*(?:stort\s*)?(?:ingångs|flyg|in)?hål/.exec(raw) ?? /hål\S*\s*(?:på|om|:)?\s*(?:ø\s*)?(\d+)\s*mm/.exec(raw);
+  if (h1) hole = parseInt(h1[1]);
+  else if (/blåmes|entita|tofsmes/.test(raw)) hole = 28;
+  else if (/talgoxe|flugsnappare|pilfink|gråsparv/.test(raw)) hole = 32;
+  else if (/stare/.test(raw)) hole = 45;
+
   const fullBoards = /hela skivor|osågade skivor|genomgående hyll|stegehyll|stegar/.test(raw);
 
-  return { template, dims, count, againstWall, door, studs, fullBoards };
+  return { template, dims, count, againstWall, door, studs, fullBoards, hole };
 }
 
 /** Översätt tolkningen till mallens parametrar. */
@@ -134,7 +144,7 @@ export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, nu
   set("height", d.height);
   set("depth", d.depth);
   if (parsed.count != null) {
-    const key = t.params.find((p) => ["shelves", "drawers"].includes(p.key))?.key;
+    const key = t.params.find((p) => ["shelves", "drawers", "levels"].includes(p.key))?.key;
     if (key) set(key, parsed.count);
   }
   if (parsed.againstWall != null && "againstWall" in out) out.againstWall = parsed.againstWall;
@@ -143,6 +153,7 @@ export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, nu
   if ("studFrame" in out && parsed.studs) out.studFrame = true;
   // "hela skivor", "genomgående hyllplan", "stegehylla" → hyllplan av hela skivor genom stegar
   if ("fullBoards" in out && parsed.fullBoards) out.fullBoards = true;
+  if (parsed.hole != null) set("hole", parsed.hole);
   // Hyllsystem: fler hyllplan om det är högt och antal inte angetts
   if (t.id === "shelf" && parsed.count == null) out.shelves = Math.max(2, Math.round(+out.height / 380));
   return out;
