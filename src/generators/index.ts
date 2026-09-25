@@ -3,6 +3,7 @@ import { shelf } from "./shelf";
 import { catio } from "./catio";
 import { bench, raisedBed, workbench } from "./furniture";
 import { dresser, penHolder } from "./cabinet";
+import { sheetShelf } from "./sheetShelf";
 
 export interface ParamDef {
   key: string;
@@ -21,6 +22,8 @@ export interface Template {
   icon: string;
   /** Nyckelord (regex) som känner igen mallen i fritext */
   match: RegExp;
+  /** Högre prioritet vinner över mallar som matchar tidigare i texten (för mer specifika mallar) */
+  priority?: number;
   example: string;
   params: ParamDef[];
   build: (ws: Workshop, p: Design["params"], prompt: string) => Design;
@@ -38,6 +41,17 @@ export const TEMPLATES: Template[] = [
     params: [mm("width", "Bredd", 2500, 400, 6000), mm("height", "Höjd", 2400, 400, 4000), mm("depth", "Djup", 300, 150, 700),
       { key: "shelves", label: "Hyllplan per fack", type: "number", min: 1, max: 12, step: 1, default: 6 }],
     build: shelf,
+  },
+  {
+    id: "sheetShelf", name: "Hyllsystem av spånskivor", icon: "🗃️",
+    match: /spånskiv|spånplatt|skivhyll|hyll\S* av skivor/i,
+    priority: 1,
+    example: "Bygg ett hyllsystem av spånskivor 18 mm, 2,5 m brett och 2,5 m högt",
+    params: [mm("width", "Bredd", 2500, 400, 6000), mm("height", "Höjd", 2500, 400, 3000), mm("depth", "Djup", 500, 150, 600),
+      { key: "shelves", label: "Hyllplan per fack (inkl. topp & botten)", type: "number", min: 2, max: 12, step: 1, default: 6 },
+      mm("maxSpan", "Max fackbredd", 800, 300, 1200),
+      { key: "adjustable", label: "Ställbara hyllor (borrade hålrader)", type: "bool", default: true }],
+    build: sheetShelf,
   },
   {
     id: "catio", name: "Katt-patio", icon: "🐈",

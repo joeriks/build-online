@@ -30,6 +30,7 @@ Mallarna anpassar sig automatiskt:
 | Mall | Exempel |
 | --- | --- |
 | 📚 Hyllsystem mot vägg | "hyllsystem 2,5 m brett och 3 m högt med 7 hyllor" |
+| 🗃️ Hyllsystem av spånskivor | "hyllsystem av spånskivor 18 mm, 2,5 m brett och 2,5 m högt" |
 | 🐈 Katt-patio | "katt-patio mot huset, 2 x 1,2 m, utan dörr" |
 | 🛠️ Arbetsbänk | "arbetsbänk 1,6 m lång med hylla under" |
 | 🗄️ Byrå med lådor | "byrå med 4 lådor, 80 cm bred och 90 cm hög" |

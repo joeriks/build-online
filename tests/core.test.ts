@@ -56,7 +56,8 @@ describe("generatorer", () => {
     const ws = defaultWorkshop();
     ws.materials.forEach((m) => (m.available = m.id === "regel-45x45"));
     ws.tools.forEach((t) => (t.available = ["handsag", "skruvdragare"].includes(t.id)));
-    for (const t of TEMPLATES) {
+    // Spånskivehyllan är per definition byggd av skivor
+    for (const t of TEMPLATES.filter((x) => x.id !== "sheetShelf")) {
       const d = t.build(ws, paramsFromParsed(t, parsePrompt(t.example)), "");
       expect(d.parts.every((p) => p.materialId === "regel-45x45" || ws.materials.find((m) => m.id === p.materialId)!.kind === "mesh")).toBe(true);
     }
@@ -82,5 +83,47 @@ describe("bounds", () => {
     expect(b.max.x - b.min.x).toBeLessThan(2410);
     expect(b.max.z - b.min.z).toBeLessThan(1210);
     expect(b.max.y - b.min.y).toBeLessThan(2010);
+  });
+});
+
+describe("spånskivehylla", () => {
+  it("känns igen och byggs av spånskiva 500×2500 utan klyvning", () => {
+    const text = "gör ett hyllsystem med spånskivor, 2,5 m brett och 2,5 m högt";
+    const parsed = parsePrompt(text);
+    expect(parsed.template?.id).toBe("sheetShelf");
+    const ws = defaultWorkshop();
+    const d = parsed.template!.build(ws, paramsFromParsed(parsed.template!, parsed), text);
+    expect(d.parts.every((p) => p.materialId === "spanskiva-18")).toBe(true);
+    const buy = purchases(d, ws).find((p) => p.material.id === "spanskiva-18")!;
+    // gavlar och hyllplan använder skivans hela bredd – ingen längsgående klyvning
+    const panels = buy.sheets!.flatMap((s) => s.placed).filter((r) => /Gavel|hylla|Hyllplan/.test(r.name));
+    expect(panels.filter((r) => r.h !== 500).map((r) => r.name)).toEqual([]);
+    // 5 gavlar à 2500 + 24 hyllplan ~602 (4 per skiva) + sockel/fästlister
+    expect(buy.qty).toBeLessThanOrEqual(13);
+    expect(checkDesign(d, ws).filter((w) => w.level === "error")).toEqual([]);
+  });
+  it("vanligt hyllsystem väljs fortfarande utan skivord", () => {
+    expect(parsePrompt("hyllsystem 2,5 m brett").template?.id).toBe("shelf");
+  });
+  it("arbetsbänkens skiva pusslas inte ihop av 50 cm-remsor", () => {
+    const t = TEMPLATES.find((x) => x.id === "workbench")!;
+    const d = t.build(defaultWorkshop(), paramsFromParsed(t, parsePrompt(t.example)), "");
+    expect(d.parts.some((p) => p.materialId === "spanskiva-18")).toBe(false);
+  });
+});
+
+describe("materialmått tolkas inte som konstruktionens mått", () => {
+  it("50 cm breda och 2,5 m långa spånskivor", () => {
+    const p = parsePrompt("gör ett hyllsystem med 50 cm breda och 2,5 m långa spånskivor 18 mm, 2,5 m brett och 2,5 m högt");
+    expect(p.template?.id).toBe("sheetShelf");
+    expect(p.dims).toEqual({ width: 2500, height: 2500 });
+  });
+  it("reglar 45x45 mm", () => {
+    const p = parsePrompt("bygg en katt-patio av reglar 45x45 mm, 3 m bred");
+    expect(p.dims).toEqual({ width: 3000 });
+    expect(parsePrompt("katt-patio av 45×45 mm reglar").dims).toEqual({});
+  });
+  it("mått direkt efter materialet behålls när de beskriver konstruktionen", () => {
+    expect(parsePrompt("hyllsystem av spånskivor 2,5 m brett").dims).toEqual({ width: 2500 });
   });
 });

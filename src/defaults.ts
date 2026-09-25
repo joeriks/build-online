@@ -19,6 +19,10 @@ export function defaultMaterials(): Material[] {
       stockLength: 2440, stockWidth: 1220, price: 450, color: "#e8cf9c", available: true,
     },
     {
+      id: "spanskiva-18", name: "Spånskiva 18 mm (500×2500)", kind: "sheet", a: 18, b: 18,
+      stockLength: 2500, stockWidth: 500, price: 290, color: "#dcc9a0", available: true,
+    },
+    {
       id: "osb-18", name: "OSB 18 mm", kind: "sheet", a: 18, b: 18,
       stockLength: 2440, stockWidth: 1220, price: 380, color: "#c9a060", available: false,
     },

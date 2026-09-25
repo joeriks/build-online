@@ -138,18 +138,19 @@ export interface SurfaceOpts {
  */
 export function fillSurface(b: Builder, name: string, group: string, x0: number, y0: number, z0: number, lx: number, lz: number, opts: SurfaceOpts = {}): { thickness: number; kind: string } {
   const gap = opts.gap ?? 6;
-  const sheet = opts.preferSheet !== false ? pickSheet(b.ws, opts.minSheet ?? 9) : null;
-  if (sheet) {
-    const along = lz <= sheet.stockWidth ? sheet.stockLength : lz <= sheet.stockLength ? sheet.stockWidth : 0;
-    if (along) {
-      // dela längs X om det behövs
-      const nx = Math.ceil(lx / along);
-      const seg = lx / nx;
-      for (let i = 0; i < nx; i++)
-        b.box(nx > 1 ? `${name} ${i + 1}` : name, sheet, { x: x0 + i * seg, y: y0, z: z0 }, { x: seg, y: sheet.a, z: lz }, group);
-      if (nx > 1) b.note(`${name}: skivan är skarvad – se till att skarven hamnar över ett stöd.`);
-      return { thickness: sheet.a, kind: "sheet" };
-    }
+  const sheets = opts.preferSheet !== false
+    ? avail(b.ws, "sheet").filter((m) => m.a >= (opts.minSheet ?? 9)).sort((x, y) => x.a - y.a)
+    : [];
+  for (const sheet of sheets) {
+    // Skivan måste täcka hela djupet (lz) i en bit – annars blir det bara remsor
+    const along = lz <= sheet.stockWidth ? sheet.stockLength : lz <= sheet.stockLength && lx <= sheet.stockWidth ? sheet.stockWidth : 0;
+    if (!along) continue;
+    const nx = Math.ceil(lx / along);
+    const seg = lx / nx;
+    for (let i = 0; i < nx; i++)
+      b.box(nx > 1 ? `${name} ${i + 1}` : name, sheet, { x: x0 + i * seg, y: y0, z: z0 }, { x: seg, y: sheet.a, z: lz }, group);
+    if (nx > 1) b.note(`${name}: skivan är skarvad – se till att skarven hamnar över ett stöd.`);
+    return { thickness: sheet.a, kind: "sheet" };
   }
   const board = pickBoard(b.ws);
   const m = board ?? pickFrame(b.ws);

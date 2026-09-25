@@ -42,15 +42,28 @@ export interface Parsed {
   door: boolean | null;
 }
 
+const MAT_NOUN = String.raw`(?:spånskiv|spånplatt|skiv|bräd|regl|regel|läkt|plank|virke|plywood|osb|trall)\p{L}*`;
+// "50 cm breda och 2,5 m långa spånskivor", "18 mm tjocka skivor"
+const MAT_DESC_BEFORE = new RegExp(String.raw`(?:${NUM}\s*${UNIT}\s*(?:breda|långa|tjocka|höga|djupa)\s*(?:,|och)?\s*)+${MAT_NOUN}`, "gu");
+// "reglar 45x45 mm", "spånskivor 18 mm", "plywood 12 mm"
+// (bara tvärsnitt "45x45" eller tjocklek i mm – "spånskivor 2,5 m brett" ska vara kvar)
+const MAT_DESC_AFTER = new RegExp(String.raw`${MAT_NOUN}\s*(?:på|om|i)?\s*(?:${NUM}(?:\s*[x×*]\s*${NUM})+\s*(?:mm)?|${NUM}\s*mm)(?!\s*(?:bred|hög|djup|lång))`, "gu");
+// "45x45 mm reglar"
+const MAT_SIZE_BEFORE = new RegExp(String.raw`${NUM}(?:\s*[x×*]\s*${NUM})+\s*${UNIT}\s*${MAT_NOUN}`, "gu");
+
 export function parsePrompt(text: string): Parsed {
-  const s = text.toLowerCase().replace(/\s+/g, " ");
-  // Mall: den vars nyckelord förekommer tidigast i texten
+  const raw = text.toLowerCase().replace(/\s+/g, " ");
+  // Mått som beskriver materialet ska inte tolkas som konstruktionens mått
+  const s = raw.replace(MAT_DESC_BEFORE, " ").replace(MAT_SIZE_BEFORE, " ").replace(MAT_DESC_AFTER, " ");
+  // Mall: högst prioritet, därefter den vars nyckelord förekommer tidigast i texten
   let template: Template | null = null;
-  let best = Infinity;
+  let best = { prio: -Infinity, index: Infinity };
   for (const t of TEMPLATES) {
-    const m = t.match.exec(s);
-    if (m && m.index < best) {
-      best = m.index;
+    const m = t.match.exec(raw);
+    if (!m) continue;
+    const prio = t.priority ?? 0;
+    if (prio > best.prio || (prio === best.prio && m.index < best.index)) {
+      best = { prio, index: m.index };
       template = t;
     }
   }

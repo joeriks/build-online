@@ -45,6 +45,8 @@ function initialState(): State {
   const saved = safeGet<Partial<State> | null>(KEY, null);
   const shelfT = TEMPLATES[0];
   const ws = saved?.ws ?? defaultWorkshop();
+  // Nya standardmaterial i senare versioner läggs till i sparade verkstäder
+  for (const m of defaultMaterials()) if (!ws.materials.some((x) => x.id === m.id)) ws.materials.push(m);
   const design = saved?.design ?? shelfT.build(ws, paramsFromParsed(shelfT, parsePrompt(shelfT.example)), shelfT.example);
   return {
     ws,
@@ -567,12 +569,13 @@ function renderOverview() {
   const buy = purchases(d, state.ws);
   const cost = buy.reduce((s, p) => s + (p.cost ?? 0), 0);
   const lin = buy.filter((p) => p.material.kind === "linear").reduce((s, p) => s + (p.totalLength ?? 0), 0);
+  const sheets = buy.filter((p) => p.material.kind === "sheet").reduce((s, p) => s + p.qty, 0);
   const b = bounds(d.parts);
   const size = d.parts.length ? `${fmt(b.max.x - b.min.x)} × ${fmt(b.max.z - b.min.z)} × ${fmt(b.max.y - b.min.y)} mm` : "–";
   el.innerHTML = `
     <div class="stats">
       <div class="stat"><div class="v">${d.parts.length}</div><div class="k">delar</div></div>
-      <div class="stat"><div class="v">${(lin / 1000).toFixed(1)} m</div><div class="k">virke</div></div>
+      ${lin || !sheets ? `<div class="stat"><div class="v">${(lin / 1000).toFixed(1)} m</div><div class="k">virke</div></div>` : `<div class="stat"><div class="v">${sheets}</div><div class="k">skivor</div></div>`}
       <div class="stat"><div class="v">${cost ? kr(cost) : "–"}</div><div class="k">ca materialkostnad</div></div>
     </div>
     <div class="small muted">Yttermått (B × D × H): <span class="num">${size}</span></div>
