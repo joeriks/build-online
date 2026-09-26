@@ -8,6 +8,7 @@ import { bounds, checkDesign, cutList, partShape, purchases, type Warning } from
 import { Viewer } from "./viewer";
 import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
 import { LOAD_PRESETS, analyzeStrength, defaultLoad, type MemberResult, type StrengthReport } from "./strength";
+import { autoReinforce, suggestFor, type Suggestion } from "./reinforce";
 
 // ---------------------------------------------------------------- state
 
@@ -965,6 +966,9 @@ $("#stepbar").addEventListener("click", (e) => {
 
 let strength: StrengthReport | null = null;
 let heatOn = false;
+/** Förslag per grupp (nyckel = första delens id), räknas om efter varje ändring */
+let sugCache = new Map<string, Suggestion[]>();
+const sugOpen = new Set<string>();
 const pct = (u: number) => `${Math.round(u * 100)} %`;
 
 /** Slå ihop likadana resultat (t.ex. 24 identiska hyllplan) till en rad. */
@@ -1002,10 +1006,29 @@ function renderStrength() {
       m.kind !== "stolpe" ? `svikt ${m.deflection} mm (max ${m.limit})` : "",
       m.maxKg != null ? `tål ca ${fmt(m.maxKg)} kg (${fmt(m.maxKgM2!)} kg/m²)` : "",
     ].filter(Boolean).join(" · ");
+    const key = m.id;
+    const showSug = m.util > 1 || sugOpen.has(key);
+    let sugHtml = "";
+    if (showSug) {
+      let list = sugCache.get(key);
+      if (!list) {
+        list = suggestFor(d, state.ws, r, g).slice(0, 4);
+        sugCache.set(key, list);
+      }
+      sugHtml = list.length
+        ? `<div class="sugs">${list.map((sg, si) => `
+            <div class="sug ${sg.after <= 1 ? "ok" : ""}" data-sug="${esc(key)}|${si}">
+              <div class="grow"><strong>${esc(sg.title)}</strong><div class="small muted">${esc(sg.detail)}</div>
+                <div class="small num">${pct(sg.before)} → <b style="color:${color(sg.after)}">${pct(sg.after)}</b>${sg.worstAfter > sg.after + 0.01 ? ` · högsta i hela: ${pct(sg.worstAfter)}` : ""} · ${sg.costDelta >= 0 ? "+" : "−"}${kr(Math.abs(sg.costDelta))}${sg.partsDelta ? ` · ${sg.partsDelta > 0 ? "+" : ""}${sg.partsDelta} delar` : ""}</div></div>
+              <button class="btn small ${si === 0 ? "primary" : ""}" data-accept="${esc(key)}|${si}">Acceptera</button>
+            </div>`).join("")}</div>`
+        : `<div class="small muted" style="margin-top:6px">Inga automatiska förslag – ${esc(m.advice ?? "ändra konstruktionen för hand.")}</div>`;
+    }
     return `<tr class="click" data-sg="${gi}">
-      <td>${esc(m.name)}${g.length > 1 ? ` <span class="tag">×${g.length}</span>` : ""}<div class="small muted">${esc(m.materialName)} · ${sub}</div>${m.advice ? `<div class="advice">${esc(m.advice)}</div>` : ""}</td>
+      <td>${esc(m.name)}${g.length > 1 ? ` <span class="tag">×${g.length}</span>` : ""}<div class="small muted">${esc(m.materialName)} · ${sub}</div>${m.advice && !showSug ? `<div class="advice">${esc(m.advice)}</div>` : ""}
+        ${m.util > 0.8 && m.util <= 1 && !sugOpen.has(key) ? `<button class="btn ghost small" data-sugopen="${esc(key)}" style="padding-left:0">Visa förslag på förstärkning</button>` : ""}</td>
       <td style="width:110px"><div class="small r num" style="text-align:right">${pct(m.util)} <span class="muted">${what}</span></div><div class="ubar ${m.util > 1 ? "over" : ""}"><span style="width:${Math.min(100, m.util * 100)}%;background:${color(m.util)}"></span></div></td>
-    </tr>`;
+    </tr>${sugHtml ? `<tr class="sugrow"><td colspan="2">${sugHtml}</td></tr>` : ""}`;
   }).join("");
   el.innerHTML = `
     <h3 style="margin-top:0">Last på ytor</h3>
@@ -1014,6 +1037,7 @@ function renderStrength() {
     <div class="actions" style="margin-top:8px">${LOAD_PRESETS.map((p) => `<button class="chip ${p.kg === r.loadKgM2 ? "on" : ""}" data-load="${p.kg}">${p.label} ${p.kg}</button>`).join("")}</div>
     <p class="small muted">Lasten läggs på allt man ställer saker på – hyllplan, sitsar, lock, trall – och förs ned genom konstruktionen.</p>
     ${status}
+    ${over.length ? `<div class="actions" style="margin:-2px 0 8px"><button class="btn primary" id="auto-reinforce">Förstärk automatiskt</button><span class="small muted" style="align-self:center">väljer det billigaste förslaget som räcker för varje svag del</span></div>` : ""}
     <div class="warn-item ${r.tipping.level === "warn" ? "warn" : "info"}"><span>${r.tipping.level === "warn" ? "⚠️" : "↕"}</span><span>${esc(r.tipping.text)}</span></div>
     ${r.unsupported.length ? `<div class="warn-item warn"><span>⚠️</span><span>Delar utan stöd: ${esc(r.unsupported.slice(0, 5).join(", "))}${r.unsupported.length > 5 ? " …" : ""}</span></div>` : ""}
     <label class="switch" style="margin-top:10px"><input type="checkbox" id="heat" ${heatOn ? "checked" : ""}/> Visa utnyttjandegrad i 3D</label>
@@ -1029,6 +1053,27 @@ strengthEl.addEventListener("click", (e) => {
   const tgt = e.target as HTMLElement;
   const lb = tgt.closest<HTMLElement>("[data-load]");
   if (lb) return setLoad(Number(lb.dataset.load));
+  const acc = tgt.closest<HTMLElement>("[data-accept]");
+  if (acc) {
+    const [key, si] = acc.dataset.accept!.split("|");
+    const sg = sugCache.get(key)?.[+si];
+    if (sg) acceptSuggestion(sg);
+    return;
+  }
+  const so = tgt.closest<HTMLElement>("[data-sugopen]");
+  if (so) {
+    sugOpen.add(so.dataset.sugopen!);
+    return renderStrength();
+  }
+  if (tgt.closest("#auto-reinforce")) {
+    const res = autoReinforce(state.design, state.ws, groupMembers);
+    if (!res.applied.length) return toast("Hittade inga förslag som hjälper – ändra konstruktionen för hand.");
+    commit(() => (state.design = res.design), { keepBuild: true });
+    const left = strength?.members.filter((m) => m.util > 1).length ?? 0;
+    toast(`Förstärkt: ${res.applied.join(", ")}.${left ? ` ${left} del(ar) är fortfarande för svaga.` : " Allt håller nu."}`, 7000);
+    return;
+  }
+  if (tgt.closest(".sugrow")) return;
   const row = tgt.closest<HTMLElement>("[data-sg]");
   if (row) {
     const g = (strengthEl as HTMLElement & { _groups?: MemberResult[][] })._groups?.[+row.dataset.sg!];
@@ -1047,6 +1092,21 @@ strengthEl.addEventListener("change", (e) => {
     viewer.setHeatmap(heatOn && strength ? new Map(strength.members.map((m) => [m.id, m.util])) : null);
     applySteps();
   }
+});
+
+function acceptSuggestion(sg: Suggestion) {
+  commit(() => (state.design = sg.design), { keepBuild: !sg.key.startsWith("maxspan") });
+  viewer.setHighlight(sg.changedIds.slice(0, 200));
+  toast(`${sg.title}: ${pct(sg.before)} → ${pct(sg.after)}. Kapnings- och inköpslistan är uppdaterade – ångra med Ctrl+Z.`, 6000);
+}
+
+// Hovra över ett förslag för att se vilka delar det gäller
+strengthEl.addEventListener("mouseover", (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-sug]");
+  if (!el) return;
+  const [key, si] = el.dataset.sug!.split("|");
+  const sg = sugCache.get(key)?.[+si];
+  if (sg) viewer.setHighlight(sg.memberIds);
 });
 
 function setLoad(kg: number) {
@@ -1069,6 +1129,7 @@ function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   const d = state.design;
   warnings = checkDesign(d, state.ws);
   strength = analyzeStrength(d, state.ws);
+  sugCache = new Map();
   viewer.setHeatmap(heatOn ? new Map(strength.members.map((m) => [m.id, m.util])) : null, false);
   const title = $("#title") as HTMLInputElement;
   if (document.activeElement !== title) title.value = d.title;

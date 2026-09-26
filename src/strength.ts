@@ -61,6 +61,13 @@ export const LOAD_PRESETS: { label: string; kg: number }[] = [
   { label: "Ved/förråd", kg: 400 },
 ];
 
+/** Bärförmåga (N) för en infästning, givet bärförmågan per skruv i det svagaste materialet. */
+export function connectionCapacity(f: Part["fastening"], perScrew: number): number {
+  if (f === "vinkel") return Math.max(4 * perScrew, 2500); // vinkelbeslag med 4–6 skruvar
+  if (f === "skruv4") return 4 * perScrew;
+  return 2 * perScrew;
+}
+
 type Axis = "x" | "y" | "z";
 interface Box {
   p: Part;
@@ -258,7 +265,13 @@ export function analyzeStrength(design: Design, ws: Workshop): StrengthReport {
     const selfTotal = (P.props.rho * G * P.p.dims.x * P.p.dims.y * P.p.dims.z) / 1e9;
     const areaTotal = surface ? (q * G * P.p.dims.x * P.p.dims.z) / 1e6 : 0;
     const ptsTotal = pts0.reduce((sum, pl) => sum + pl.F, 0);
-    if (full.length) {
+    // Skruvad mot väggar på BÅDA långsidorna (t.ex. ett hyllplan mellan två gavlar som är
+    // smalare än djupet): då spänner delen tvärs över mellan dem – inte "fullt stödd"
+    const longFull = full.filter((c) => c.face === "long");
+    const O0 = other(L0);
+    const bothSides = longFull.some((c) => c.Q.max[O0] <= P.min[O0] + TOL) && longFull.some((c) => c.Q.min[O0] >= P.max[O0] - TOL);
+    const acrossWalls = bothSides && !full.some((c) => c.face === "under") ? longFull : null;
+    if (full.length && !acrossWalls) {
       const F = (selfTotal + areaTotal + ptsTotal) / full.length;
       for (const c of full) transferFrom(c.Q, P, F);
       return null;
@@ -275,7 +288,10 @@ export function analyzeStrength(design: Design, ws: Workshop): StrengthReport {
     // Välj riktning: ligger delen på två långa kanter (t.ex. ett lock på fyra väggar) spänner den
     // den kortare vägen tvärs över – annars längs längden
     let L: Axis = L0, supportsC = normal, edgeShare = 0;
-    if (edgeLines.length >= 2) {
+    if (acrossWalls) {
+      L = O0;
+      supportsC = acrossWalls.map((c) => ({ ...c, face: "end" as const }));
+    } else if (edgeLines.length >= 2) {
       L = other(L0);
       supportsC = edgeLines;
     } else if (!normal.length) {
@@ -376,7 +392,7 @@ export function analyzeStrength(design: Design, ws: Workshop): StrengthReport {
         // (samma riktning): vid stödpunktens läge längs delen.
         if (isHorizontal(s.Q) && lenAxis(s.Q) === L) transfer(s.Q, x0 + g.c, R);
         else transferFrom(s.Q, P, R);
-        if (s.side) uConn = Math.max(uConn, R / (2 * Math.min(P.props.screw, s.Q.props.screw)));
+        if (s.side) uConn = Math.max(uConn, R / connectionCapacity(P.p.fastening, Math.min(P.props.screw, s.Q.props.screw)));
       }
     });
 

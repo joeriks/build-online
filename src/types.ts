@@ -45,7 +45,11 @@ export interface Part {
   group: string;
   /** Enhet som hör ihop och kan markeras/flyttas tillsammans, t.ex. "Fack 2" eller "Låda 1" */
   unit?: string;
+  /** Infästning mot det delen hänger i: 2 skruvar (standard), 4 skruvar eller vinkelbeslag */
+  fastening?: Fastening;
 }
+
+export type Fastening = "skruv2" | "skruv4" | "vinkel";
 
 export interface Step {
   title: string;

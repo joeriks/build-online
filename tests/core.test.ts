@@ -289,11 +289,73 @@ describe("hållfasthet", () => {
     expect(pin.util).toBeGreaterThan(0.02);
   });
 
+  it("hyllplan mellan två gavlar räknas även när facket är smalare än djupet", () => {
+    const t = TEMPLATES.find((x) => x.id === "sheetShelf")!;
+    const ws = defaultWorkshop();
+    const d = t.build(ws, { width: 2500, height: 2500, depth: 500, shelves: 6, maxSpan: 450, adjustable: false }, "");
+    const r = analyzeStrength(d, ws);
+    const shelf = r.members.find((m) => m.name.startsWith("Hyllplan 2 fack 1"))!;
+    expect(shelf).toBeTruthy();
+    expect(shelf.span).toBeGreaterThan(350);
+    expect(shelf.span).toBeLessThan(460);
+  });
+
   it("stegehyllan med hela skivor klarar mer än skivgavlar med samma fackbredd", () => {
     const t = TEMPLATES.find((x) => x.id === "sheetShelf")!;
     const ws = defaultWorkshop();
     const base = { width: 2500, height: 2500, depth: 500, shelves: 6, maxSpan: 800, adjustable: false, studFrame: false };
     const worst = (extra: object) => analyzeStrength(t.build(ws, { ...base, ...extra }, ""), ws).worst!.util;
     expect(worst({ fullBoards: true })).toBeLessThan(worst({ fullBoards: false }));
+  });
+});
+
+import { autoReinforce, suggestFor } from "../src/reinforce";
+describe("förstärkning", () => {
+  const group = (list: ReturnType<typeof analyzeStrength>["members"]) => {
+    const m = new Map<string, typeof list>();
+    for (const x of list) {
+      const k = [x.kind, x.span, x.deflection, Math.round(x.util * 100)].join("|");
+      m.set(k, [...(m.get(k) ?? []), x]);
+    }
+    return [...m.values()];
+  };
+  it("föreslår åtgärder som sänker utnyttjandet och räknar kostnad", () => {
+    const t = TEMPLATES.find((x) => x.id === "sheetShelf")!;
+    const ws = defaultWorkshop();
+    const d = t.build(ws, paramsFromParsed(t, parsePrompt(t.example)), "");
+    const r = analyzeStrength(d, ws);
+    const g = group(r.members.filter((m) => m.util > 1))[0];
+    const ss = suggestFor(d, ws, r, g);
+    expect(ss.length).toBeGreaterThan(1);
+    expect(ss.every((s) => s.after < s.before)).toBe(true);
+    const list = ss.find((s) => s.key === "list-front")!;
+    expect(list.after).toBeLessThan(1);
+    expect(list.partsDelta).toBe(g.length);
+    // originalet är orört
+    expect(analyzeStrength(d, ws).worst!.util).toBeCloseTo(r.worst!.util, 5);
+  });
+  it("förstärk automatiskt ger en konstruktion som håller", () => {
+    for (const [id, load] of [["sheetShelf", 100], ["shoeRack", 150], ["catLitterBench", 400]] as const) {
+      const t = TEMPLATES.find((x) => x.id === id)!;
+      const ws = defaultWorkshop();
+      const d = t.build(ws, paramsFromParsed(t, parsePrompt(t.example)), "");
+      d.loadKgM2 = load;
+      const res = autoReinforce(d, ws, group);
+      expect([id, res.applied.length > 0]).toEqual([id, true]);
+      expect([id, analyzeStrength(res.design, ws).worst!.util <= 1]).toEqual([id, true]);
+    }
+  });
+  it("starkare infästning höjer bärförmågan", () => {
+    const ws = defaultWorkshop();
+    const box = (id: string, min: [number, number, number], size: [number, number, number]): Part => ({
+      id, name: id, materialId: "regel-45x45", dims: { x: size[0], y: size[1], z: size[2] },
+      pos: { x: min[0] + size[0] / 2, y: min[1] + size[1] / 2, z: min[2] + size[2] / 2 }, rot: { x: 0, y: 0, z: 0 }, endCuts: [0, 0], group: "g",
+    });
+    const d: Design = { title: "t", prompt: "", templateId: null, params: {}, steps: [], hardware: [], notes: [], wall: null, loadKgM2: 100,
+      parts: [box("stolpe", [0, 0, 0], [45, 1000, 45]), box("konsol", [45, 900, 0], [45, 45, 400])] };
+    const u2 = analyzeStrength(d, ws).members.find((m) => m.id === "konsol")!.uConn;
+    d.parts[1].fastening = "vinkel";
+    const uV = analyzeStrength(d, ws).members.find((m) => m.id === "konsol")!.uConn;
+    expect(uV).toBeLessThan(u2);
   });
 });

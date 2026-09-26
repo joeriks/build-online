@@ -272,3 +272,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .status.warn { background: var(--warn-soft); color: var(--warn); }
 .status.error { background: var(--err-soft); color: var(--err); }
 .tbl .advice { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.sugs { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.sug { display: flex; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--panel); cursor: default; }
+.sug.ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.sug .grow { flex: 1; min-width: 0; }
+.sug strong { font-size: 13px; }
+.sug button { flex: none; }
+.tbl tr.sugrow td { padding-top: 0; }
+.tbl tr.click:has(+ tr.sugrow) td { border-bottom: 0; }

@@ -60,6 +60,11 @@ Fliken **Hållfasthet** räknar ut om konstruktionen bär:
 - välj last (kg/m²) – t.ex. *Böcker 150*, *Sittyta 300*, *Ved/förråd 400* – och se **utnyttjandegrad**
   per del, hur mycket varje hylla tål i kg och förslag som "minska spannet till ca 580 mm"
 - slå på färgkartan för att se svaga delar i 3D (grönt → rött)
+- **förslag på förstärkning** för varje del som inte håller (eller är nära gränsen): list under
+  fram-/bakkant, tjockare skiva, grövre virke eller högkant, fler skruvar/vinkelbeslag, grövre stolpar
+  eller kortare spann. Varje förslag är provräknat – du ser *före → efter*, merkostnad och antal nya
+  delar – och **Acceptera** lägger in ändringen i modellen, kapnings- och inköpslistan (kan ångras)
+- **Förstärk automatiskt** väljer det billigaste förslaget som räcker för varje svag del
 
 Beräkningen är förenklad (ungefärliga värden för C24/C18, spånskiva, plywood och OSB) och ersätter
 inte en konstruktionsberäkning för bärande konstruktioner som höga altaner.
@@ -98,6 +103,7 @@ Koden i korthet:
 - `src/parse.ts` – tolkar fritext ("2,5 meter bred", "fyra lådor", "mot huset")
 - `src/analysis.ts` – kapningslista, kapoptimering, skivschema och verktygskontroll
 - `src/strength.ts` – hållfasthetsanalys (last, böjning, svikt, infästningar, tipprisk)
+- `src/reinforce.ts` – förslag på förstärkning som provräknas och kan accepteras
 - `src/viewer.ts` – 3D-vyn
 - `src/ai.ts` – AI-generering via Claude
 - `src/main.ts` – gränssnittet
