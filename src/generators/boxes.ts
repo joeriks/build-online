@@ -7,8 +7,9 @@
 import type { Design, Material, Workshop } from "../types";
 import { Builder, panel, pickPanel } from "./builder";
 import { panelThickness } from "./cabinet";
+import { guideById } from "../joinery";
 
-export type Joinery = "stumfog" | "finger" | "gering";
+export type Joinery = "stumfog" | "fals" | "finger" | "gering";
 type Bottom = "auto" | "spar" | "under" | "lister";
 
 /** Helst en bräda som räcker till hela höjden (inga limfogar), annars skiva/limmade remsor. */
@@ -124,7 +125,7 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
   const drill = b.has("skruvdragare") || b.has("borrmaskin");
   const band = b.has("bandtving");
   let bottom = (p.bottom as Bottom) ?? "auto";
-  if (bottom === "auto") bottom = joinery === "stumfog" ? "under" : saw || router ? "spar" : "lister";
+  if (bottom === "auto") bottom = joinery === "stumfog" || joinery === "fals" ? "under" : saw || router ? "spar" : "lister";
   if (bottom === "spar" && !saw && !router) {
     b.note("Spår för botten kräver bordssåg eller överfräs – bottnen läggs på lister i stället.");
     bottom = "lister";
@@ -140,7 +141,16 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
 
   // ----- Väggar
   const walls = "väggar";
-  if (joinery === "stumfog") {
+  const r = Math.max(4, Math.round(t / 2)); // falsens djup
+  if (joinery === "fals") {
+    b.unit = "Låda";
+    // Långsidorna har en fals i varje ände där gaveln sitter; gaveln går in r mm i långsidan
+    panel(b, "Framsida (falsad)", "långsidor", mat, { x: 0, y: wallY, z: D - t }, { x: W, y: wallH, z: t });
+    panel(b, "Baksida (falsad)", "långsidor", mat, { x: 0, y: wallY, z: 0 }, { x: W, y: wallH, z: t });
+    panel(b, "Gavel V", "gavlar", mat, { x: 0, y: wallY, z: t - r }, { x: t, y: wallH, z: D - 2 * t + 2 * r });
+    panel(b, "Gavel H", "gavlar", mat, { x: W - t, y: wallY, z: t - r }, { x: t, y: wallH, z: D - 2 * t + 2 * r });
+    b.note(`Fals: ${t} mm bred och ${r} mm djup i varje ände av fram- och baksidan. Gavlarna blir ${D - 2 * t + 2 * r} mm långa.`);
+  } else if (joinery === "stumfog") {
     b.unit = "Låda";
     panel(b, "Framsida", "långsidor", mat, { x: 0, y: wallY, z: D - t }, { x: W, y: wallH, z: t });
     panel(b, "Baksida", "långsidor", mat, { x: 0, y: wallY, z: 0 }, { x: W, y: wallH, z: t });
@@ -213,6 +223,7 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
     else b.hw("Dyckert/spik 1,6×40 (om skruvdragare saknas)", 16);
   }
   if (joinery === "gering") b.hw("Kilar: tunna remsor 3 mm (spill, fanér eller kontrastträ)", 1, "sats");
+  if (joinery === "fals") b.hw("Dyckert 1,6×30 (håller falsen medan limmet torkar – valfritt)", 16);
   if (bottom === "under") b.hw("Dyckert/skruv 3×25 (botten)", 12);
   if (bottom === "lister") b.hw("Dyckert 1,6×25 (lister)", 8);
   if (!band && joinery !== "stumfog") b.hw("Spännband / bandtving (om du saknar tvingar)", 1);
@@ -220,16 +231,24 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
   // ----- Byggsteg
   const cutTool = miterSaw ? "kap- & gersågen" : saw ? "bordssågen" : "handsågen";
   b.step("Förbered virket", `Välj raka, plana brädor utan sprickor och stora kvistar. Märk ut en "god sida" (utsidan) och en "god kant" (nederkant) på varje bit – alla mått tas från dem. ${mat.kind === "sheet" ? "" : "Mät tjockleken med skjutmått: fogarna ritas efter den verkliga tjockleken, inte den nominella."}`, []);
-  if (joinery === "stumfog") {
+  if (joinery === "fals") {
+    b.step("Kapa väggarna", `Kapa fram- och baksida till ${W} mm och gavlarna till ${D - 2 * t + 2 * r} mm. ${miterSaw ? "Kapa på kap- & gersågen mot ett stoppklossanslag." : "Kapa i bänkhaken med sågkloss (se Fogguide: Grunderna) – spänn en stoppkloss så att paren blir exakt lika långa."} Kontrollera ändarna med vinkelhake.`, []);
+  } else if (joinery === "stumfog") {
     b.step("Kapa väggarna", `Kapa fram- och baksida till ${W} mm och gavlarna till ${D - 2 * t} mm (= djupet minus två tjocklekar). Kapa på ${cutTool} mot ett stoppklossanslag så att par blir exakt lika långa. Kontrollera att ändarna är vinkelräta med vinkelhake – en sned ände ger glipa.`, []);
   } else if (joinery === "finger") {
     b.step("Kapa väggarna", `Kapa alla fyra väggar till lådans yttermått: fram/bak ${W} mm, gavlar ${D} mm. ${saw ? "Lägg till 0,5 mm på fingrarna så de sticker ut lite – de slipas jämna sist." : "Kapa extra noga vinkelrätt – hela fogen utgår från änden."}`, []);
   } else {
-    b.step("Kapa geringarna", `Ställ sågen på exakt 45° ${miterSaw ? "(provkapa två spillbitar och kontrollera att de blir 90° tillsammans med vinkelhake)" : saw ? "(luta klingan 45° och provkapa)" : "(använd en geringslåda och en fin såg)"}. Kapa långsidorna till ${W} mm och gavlarna till ${D} mm, mätt på YTTERsidan. Kapa par mot samma stoppkloss – om motstående sidor skiljer 1 mm blir lådan skev.`, []);
+    b.step("Kapa geringarna", `${miterSaw ? "Ställ kap- & gersågen på exakt 45° (provkapa två spillbitar och kontrollera att de blir 90° tillsammans med vinkelhake)." : saw ? "Luta bordssågens klinga 45° och provkapa." : "Gör en 45°-sågkloss (mät lika långt på två kanter av en kloss och dra linjen – se Fogguide: Gering), spänn den mot biten med tvingen och låt japansågens blad löpa mot klossen."} Kapa långsidorna till ${W} mm och gavlarna till ${D} mm, mätt på YTTERsidan. Kapa par mot samma stoppkloss – om motstående sidor skiljer 1 mm blir lådan skev.`, []);
   }
   if (bottom === "spar") b.step("Spår för botten", `Såga eller fräs ett spår på insidan av alla fyra väggar: ${g} mm djupt, ${tb} mm brett, med underkanten ${grooveY} mm från nederkanten. ${saw ? "På bordssågen: klinghöjd " + g + " mm, parallellanslaget " + grooveY + " mm, två–tre pass tills bottenskivan passar." : "Med överfräs: spårfräs, parallellanslag och flera tag."} ${joinery === "stumfog" ? "Spåret syns i gavlarnas ändar – det gör inget, eller fyll med en liten träbit." : joinery === "finger" ? "Lägg spåret inom det nedersta fingret på gavlarna så det inte syns utifrån." : "Med gering syns spåret inte alls."} Kapa bottnen till innermått + 2×${g - 1} mm.`, []);
 
-  if (joinery === "stumfog") {
+  if (joinery === "fals") {
+    b.step("Rita falsarna", `Mät gavelns verkliga tjocklek (${t} mm). På insidan av fram- och baksidan: rita en linje ${t} mm från varje ände (ansatsen). På kanterna och ändarna: rita ${r} mm från insidan (djupet). Kryssa för avfallet i hörnet.`, []);
+    b.step("Såga ansatserna", `Lägg brädan i bänkhaken med insidan upp, sågklossen på den sida av linjen som ska stå kvar. Sätt en tejpbit på japansågens blad ${r} mm från tänderna och såga tills tejpen når ytan – på båda kanterna.${saw ? " (På bordssågen: klinghöjd " + r + " mm, anslaget som stopp.)" : ""}`, []);
+    b.step("Såga klyvsnitten", `Spänn brädan stående mot bordskanten med tvingen, änden uppåt. Såga längs djuplinjen på avfallssidan ned till ansatsen: snett från ena kanten, vänd, snett från den andra, avsluta rakt. Avfallsbiten lossnar.`, []);
+    b.step("Putsa och provmontera", "Putsa falsens botten med en slipkloss tills gaveln ligger an tätt och går jäms med långsidans ände. Sätt ihop hela lådan utan lim.", ["långsidor", "gavlar"]);
+    b.step("Limma", `Stryk lim i falsarna och på gavlarnas ändar. Tryck ihop. Spänn tvingen tvärs över lådan (från framsida till baksida) med klossar under käftarna – då pressas båda gavlarna in samtidigt. ${drill ? "Två dyckert per hörn genom långsidan in i gaveln håller ihop det om du bara har en tving." : "Har du bara en tving: limma två hörn, vänta 30 min, sedan de andra två."} Mät diagonalerna.`, ["långsidor", "gavlar"]);
+  } else if (joinery === "stumfog") {
     b.step("Provmontera och märk", "Ställ upp lådan utan lim och håll ihop den med tejp eller tvingar. Kontrollera att den står plant och att hörnen är raka. Märk hörnen (A–A, B–B …) så bitarna hamnar på samma plats vid limningen.", ["långsidor", "gavlar"]);
     b.step("Förborra", drill
       ? `Rita en linje ${r1(t / 2)} mm från ändarna på fram- och baksidan. Borra tre hål per ände (${Math.round(wallH * 0.15)} mm från kanterna och ett i mitten), Ø3 mm genom framsidan och Ø2 mm en bit in i gaveln. Försänk så skruvhuvudet hamnar i nivå – eller borra Ø8 för en träplugg över skruven om den inte ska synas.`
@@ -260,6 +279,7 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
 
   // ----- Skisser
   const diagrams: NonNullable<Design["diagrams"]> = [];
+  if (joinery === "fals") diagrams.push({ title: "Fals – så sågas den", svg: guideById("fals")!.svg, caption: "Två snitt per ände: ansatsen tvärs och klyvsnittet längs. Hela guiden finns under fliken Fogar." });
   if (joinery === "stumfog") diagrams.push({ title: "Stumfog – hörnet uppifrån", svg: buttDiagram(t, drill), caption: "Enklast: framsidan täcker gavelns ände. Lim + skruv (eller dymlingar) håller." });
   if (joinery === "finger") {
     diagrams.push({ title: "Fingerskarv – brädornas ändar", svg: fingerDiagram(t, wallH, n), caption: "Fingrarna på fram/bak passar i urtagen på gavlarna. Mycket limyta – stark fog." });
@@ -273,8 +293,9 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
   if (mat.kind === "sheet") b.note(`${mat.name}: ${joinery === "gering" ? "geringen döljer skivans kanter fint." : "skivans skikt syns i fogarna – det kan vara snyggt, eller använd massivt trä."}`);
   b.note("Var metodisk: mät två gånger, kapa en gång, provmontera alltid innan du limmar.");
 
-  const title = `Låda ${W}×${D}×${H} – ${joinery === "stumfog" ? "stumfog" : joinery === "finger" ? "fingerskarv" : "gering med kilar"}`;
+  const title = `Låda ${W}×${D}×${H} – ${{ stumfog: "stumfog", fals: "fals", finger: "fingerskarv", gering: "gering med kilar" }[joinery]}`;
   const d = b.design(title, prompt, "box", p);
   d.diagrams = diagrams;
+  d.guides = ["grunder", ...({ stumfog: ["hornkloss"], fals: ["fals"], finger: [], gering: ["gering"] }[joinery])];
   return d;
 }

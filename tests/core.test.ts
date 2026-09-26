@@ -440,3 +440,27 @@ describe("lådor med olika hörnfogar", () => {
     expect(d.notes.some((n) => n.includes("Spår för botten kräver"))).toBe(true);
   });
 });
+
+import { GUIDES, guideById } from "../src/joinery";
+describe("fogguide", () => {
+  it("alla guider är kompletta och bara kräver japansåg + tving", () => {
+    expect(GUIDES.length).toBeGreaterThanOrEqual(5);
+    for (const g of GUIDES) {
+      expect(g.steps.length).toBeGreaterThanOrEqual(4);
+      expect(g.svg).toContain("<svg");
+      expect(g.tools.every((t) => ["ryggsag", "tving"].includes(t))).toBe(true);
+    }
+    // varje fog (utom grunderna) beskriver hur tvingen används
+    for (const g of GUIDES.filter((x) => x.id !== "grunder")) expect([g.id, g.steps.some((s) => s.clamp)]).toEqual([g.id, true]);
+  });
+  it("lådorna länkar till guider som finns och falsen ger rätt gavellängd", () => {
+    const t = TEMPLATES.find((x) => x.id === "boxRabbet")!;
+    expect(parsePrompt("falsad låda med japansåg och tving").template?.id).toBe("boxRabbet");
+    const d = t.build(defaultWorkshop(), { ...paramsFromParsed(t, parsePrompt(t.example)), width: 400, depth: 300, height: 150 }, "");
+    expect(d.guides).toContain("fals");
+    for (const id of d.guides ?? []) expect(guideById(id)).toBeTruthy();
+    const gavel = d.parts.find((p) => p.name === "Gavel V")!;
+    const tt = gavel.dims.x;
+    expect(gavel.dims.z).toBe(300 - 2 * tt + 2 * Math.max(4, Math.round(tt / 2)));
+  });
+});

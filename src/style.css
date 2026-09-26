@@ -292,3 +292,18 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .diagram-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--panel-2); color: var(--text); }
 .diagram { width: 100%; max-width: 420px; height: auto; display: block; margin: 0 auto; color: var(--text); }
 .print-only .diagram { max-width: 360px; color: #000; }
+
+/* Fogguide */
+.guide { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; }
+.guide.open { border-color: var(--accent); background: var(--panel); }
+.guide-head { display: flex; width: 100%; gap: 8px; align-items: flex-start; text-align: left; border: 0; background: none; padding: 10px 12px; cursor: pointer; }
+.guide-head .name { font-weight: 600; }
+.guide-head .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.guide-head .chev { color: var(--muted); }
+.guide-body { padding: 0 12px 12px; }
+.guide-body > p { margin: 0 0 10px; font-size: 13.5px; }
+.dots { display: inline-flex; gap: 2px; vertical-align: 0; }
+.dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); display: inline-block; }
+.dots i.on { background: var(--accent); }
+.clamp-tip { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--info-soft); color: var(--info); }
+.guide-links { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }

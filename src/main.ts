@@ -9,6 +9,7 @@ import { Viewer } from "./viewer";
 import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
 import { LOAD_PRESETS, analyzeStrength, defaultLoad, type MemberResult, type StrengthReport } from "./strength";
 import { autoReinforce, suggestFor, type Suggestion } from "./reinforce";
+import { GUIDES, guideById } from "./joinery";
 import { COATINGS, COLORS, EDGES, PRESETS, SANDING, coatingInfo, describeFinish, effectiveFinish, finishSummary, type Finish, type FinishSummary } from "./finish";
 
 // ---------------------------------------------------------------- state
@@ -958,13 +959,16 @@ function renderSteps() {
   const el = body("steps");
   const steps = state.design.steps;
   el.innerHTML = steps.length
-    ? `<p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
+    ? `${(state.design.guides ?? []).length ? `<div class="guide-links"><span class="small muted">Fogguide:</span> ${(state.design.guides ?? []).map((id) => guideById(id)).filter(Boolean).map((g) => `<button class="chip" data-open-guide="${g!.id}">${esc(g!.name)}</button>`).join("")}</div>` : ""}
+      <p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
       <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}${(finSummary?.steps ?? []).map((s) => `<li class="fin-step"><div class="t">${esc(s.title)} <span class="tag fin">ytbehandling</span></div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
       <button class="btn small" data-step="-1">Visa allt</button>
       ${(state.design.diagrams ?? []).map((dg) => `<h3>${esc(dg.title)}</h3><div class="diagram-card">${dg.svg}${dg.caption ? `<p class="small muted">${esc(dg.caption)}</p>` : ""}</div>`).join("")}`
     : `<p class="muted">Inga byggsteg.</p>`;
 }
 body("steps").addEventListener("click", (e) => {
+  const og = (e.target as HTMLElement).closest<HTMLElement>("[data-open-guide]");
+  if (og) return openGuide(og.dataset.openGuide!);
   const s = (e.target as HTMLElement).closest<HTMLElement>("[data-step]");
   if (!s) return;
   stepIdx = +s.dataset.step!;
@@ -1260,6 +1264,66 @@ finEl.addEventListener("change", (e) => {
   }
 });
 
+// ---------------------------------------------------------------- render: Fogar
+
+let guideOpen: string | null = null;
+let guideOnlyBasic = true;
+
+function renderJoinery() {
+  const el = body("joinery");
+  const dots = (n: number) => `<span class="dots">${[1, 2, 3].map((i) => `<i class="${i <= n ? "on" : ""}"></i>`).join("")}</span>`;
+  const toolName = (id: string) => state.ws.tools.find((t) => t.id === id)?.name ?? id;
+  const have = (id: string) => state.ws.tools.some((t) => t.id === id && t.available);
+  const related = new Set(state.design.guides ?? []);
+  const list = GUIDES.filter((g) => !guideOnlyBasic || g.tools.every((t) => ["ryggsag", "tving"].includes(t)));
+  el.innerHTML = `
+    <p class="small muted" style="margin-top:0">Fogar du kan göra med en <strong>japansåg</strong> och en <strong>tving</strong> – plus lim, blyerts, vinkelhake och sandpapper. Börja med <em>Grunderna</em>, och gör alltid en provfog i spillbitar.</p>
+    ${!have("ryggsag") || !have("tving") ? `<div class="warn-item info"><span>ℹ️</span><span>Bocka i ${!have("ryggsag") ? "<strong>Japansåg / ryggsåg</strong>" : ""}${!have("ryggsag") && !have("tving") ? " och " : ""}${!have("tving") ? "<strong>Tvingar</strong>" : ""} under Verktyg om du har dem.</span></div>` : ""}
+    <div class="list">${list.map((g) => {
+      const open = guideOpen === g.id;
+      return `<div class="guide ${open ? "open" : ""}">
+        <button class="guide-head" data-guide="${g.id}">
+          <div class="grow"><div class="name">${esc(g.name)} ${related.has(g.id) ? `<span class="tag fin">i ditt projekt</span>` : ""}</div><div class="meta">${esc(g.use)}</div>
+          ${g.strength ? `<div class="meta">Svårighet ${dots(g.difficulty)} · Hållfasthet ${dots(g.strength)} · ${esc(g.time)}</div>` : `<div class="meta">${esc(g.time)}</div>`}</div>
+          <span class="chev">${open ? "▾" : "▸"}</span>
+        </button>
+        ${open ? `<div class="guide-body">
+          <p>${esc(g.intro)}</p>
+          <div class="diagram-card">${g.svg}</div>
+          <h3>Du behöver</h3>
+          <ul class="notes small">${g.tools.map((t) => `<li>${esc(toolName(t))}${have(t) ? " ✓" : ""}</li>`).join("")}${g.need.map((n) => `<li>${esc(n)}</li>`).join("")}${g.optional.length ? `<li class="muted">Bra att ha: ${g.optional.map((t) => esc(toolName(t))).join(", ")}</li>` : ""}</ul>
+          <h3>Gör så här</h3>
+          <ol class="steps-list">${g.steps.map((st) => `<li class="fin-step"><div class="t">${esc(st.title)}</div><div class="small">${esc(st.text)}</div>${st.clamp ? `<div class="clamp-tip small"><b>Tvingen:</b> ${esc(st.clamp)}</div>` : ""}</li>`).join("")}</ol>
+          <h3>Vanliga misstag</h3>
+          <table class="tbl">${g.mistakes.map((m) => `<tr><td><strong>${esc(m.problem)}</strong><div class="small muted">${esc(m.fix)}</div></td></tr>`).join("")}</table>
+        </div>` : ""}
+      </div>`;
+    }).join("")}</div>
+    <label class="switch" style="margin-top:12px"><input type="checkbox" id="guide-basic" ${guideOnlyBasic ? "checked" : ""}/> Visa bara fogar för japansåg + tving</label>`;
+}
+
+const joinEl = body("joinery");
+joinEl.addEventListener("click", (e) => {
+  const h = (e.target as HTMLElement).closest<HTMLElement>("[data-guide]");
+  if (!h) return;
+  guideOpen = guideOpen === h.dataset.guide ? null : h.dataset.guide!;
+  renderJoinery();
+});
+joinEl.addEventListener("change", (e) => {
+  if ((e.target as HTMLElement).id === "guide-basic") {
+    guideOnlyBasic = (e.target as HTMLInputElement).checked;
+    renderJoinery();
+  }
+});
+
+/** Öppna en fogguide från ett projekt */
+function openGuide(id: string) {
+  guideOpen = id;
+  switchTab("left", "joinery");
+  renderJoinery();
+  body("joinery").querySelector(".guide.open")?.scrollIntoView({ block: "start" });
+}
+
 // ---------------------------------------------------------------- render: allt
 
 function setBadge() {
@@ -1293,6 +1357,7 @@ function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   renderSteps();
   renderStrength();
   renderFinish();
+  renderJoinery();
   setBadge();
   $("#empty").hidden = d.parts.length > 0;
   ($("#undo") as HTMLButtonElement).disabled = !undoStack.length;

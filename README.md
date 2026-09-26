@@ -46,6 +46,7 @@ Mallarna anpassar sig automatiskt:
 | 🏡 Trädäck / altan | "trädäck 3 x 2 m, 40 cm högt" |
 | ☕ Soffbord | "soffbord 110 × 60 cm med hylla under" |
 | 📦 Låda – stumfog | "enkel låda 40 × 30 cm, 15 cm hög" – lim + skruv/dymlingar, enklast |
+| 🪚 Låda – fals (japansåg + tving) | "falsad låda med japansåg och tving" – två sågsnitt per ände |
 | 🧩 Låda – fingerskarv | "låda med fingerskarvar" – bordssåg med jigg eller japansåg + stämjärn |
 | 🔺 Låda – gering med kilar | "geringslåda med kilar" – kap- & gersåg, tejptricket och kilar i hörnen |
 
@@ -62,6 +63,22 @@ provmontera, limma rätt (ändträ två gånger), kontrollera diagonaler och sli
 - beskrivningen anpassas efter verktygen: fingerskarv med bordssåg + jigg eller för hand med
   japansåg + stämjärn, gering med kap- & gersåg eller geringslåda
 - botten i spår (bordssåg/överfräs), underifrån eller på lister, och valfritt lock
+
+## Fogguide – japansåg och tving
+
+Fliken **Fogar** beskriver fogar som går att göra med bara en japansåg och en tving (plus lim,
+blyerts, vinkelhake och sandpapper), med skiss, steg för steg, exakt hur tvingen används i varje
+steg och vanliga misstag:
+
+- **Grunderna** – dragslaget, rita med kniv, såga på avfallssidan, bygg en bänkhake och en sågkloss
+  som styr bladet, djupstopp med tejp, slipkloss och provfog
+- **Stumfog med hörnkloss** – enklast, starkare än ren stumfog
+- **Falsfog** – för lådor och skåp, två snitt per ände
+- **Hörnbladning** – för ramar av regel (bänkar, bord, dörrar)
+- **Korsbladning / T-bladning** – när reglar korsar varandra
+- **Gering med kilar** – egen 45°-sågkloss och tejptricket med bara en tving
+
+Projekten länkar till de guider som hör till dem (under fliken Steg).
 
 ## Hållfasthet
 
@@ -135,7 +152,8 @@ Koden i korthet:
 - `src/strength.ts` – hållfasthetsanalys (last, böjning, svikt, infästningar, tipprisk)
 - `src/reinforce.ts` – förslag på förstärkning som provräknas och kan accepteras
 - `src/finish.ts` – ytbehandling: kanter, slipning, olja/vax/lasyr/lack/färg, åtgång och tid
-- `src/generators/boxes.ts` – lådor med stumfog, fingerskarv och gering, byggbeskrivningar och fogskisser
+- `src/generators/boxes.ts` – lådor med stumfog, fals, fingerskarv och gering, byggbeskrivningar och fogskisser
+- `src/joinery.ts` – fogguide för japansåg + tving
 - `src/viewer.ts` – 3D-vyn
 - `src/ai.ts` – AI-generering via Claude
 - `src/main.ts` – gränssnittet

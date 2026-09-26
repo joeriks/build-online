@@ -47,7 +47,7 @@ export interface Parsed {
   /** Fågelholkens ingångshål (mm) */
   hole: number | null;
   /** Lådans hörnfog */
-  joinery: "stumfog" | "finger" | "gering" | null;
+  joinery: "stumfog" | "fals" | "finger" | "gering" | null;
 }
 
 const MAT_NOUN = String.raw`(?:spånskiv|spånplatt|skiv|bräd|regl|regel|läkt|plank|virke|plywood|osb|trall)\p{L}*`;
@@ -130,7 +130,7 @@ export function parsePrompt(text: string): Parsed {
   const fullBoards = /hela skivor|osågade skivor|genomgående hyll|stegehyll|stegar/.test(raw);
 
   // Lådor: vilken hörnfog
-  const joinery = /fingerskarv|fingertapp|fingerfog|finger/.test(raw) ? "finger" : /gering|kilar/.test(raw) ? "gering" : /stumfog|skruvad|dymling/.test(raw) ? "stumfog" : null;
+  const joinery = /fingerskarv|fingertapp|fingerfog|finger/.test(raw) ? "finger" : /gering|kilar/.test(raw) ? "gering" : /fals/.test(raw) ? "fals" : /stumfog|skruvad|dymling/.test(raw) ? "stumfog" : null;
 
   return { template, dims, count, againstWall, door, studs, fullBoards, hole, joinery };
 }

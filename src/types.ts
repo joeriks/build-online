@@ -96,6 +96,8 @@ export interface Design {
   finishes?: Record<string, Finish>;
   /** Detaljskisser (SVG) som visas bland byggstegen */
   diagrams?: { title: string; svg: string; caption?: string }[];
+  /** Fogguider (id i src/joinery.ts) som hör till projektet */
+  guides?: string[];
 }
 
 export interface Workshop {

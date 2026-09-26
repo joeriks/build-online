@@ -193,6 +193,7 @@ export function emptyDesign(prompt = ""): Design {
 function boxTemplates(): Template[] {
   const variants: { id: string; name: string; icon: string; joinery: Joinery; match: RegExp; example: string }[] = [
     { id: "boxButt", name: "Låda – stumfog", icon: "📦", joinery: "stumfog", match: /enkel låda|trälåda|stumfog|skruvad låda|låda med dymling/i, example: "Bygg en enkel låda 40 × 30 cm, 15 cm hög, med stumfog" },
+    { id: "boxRabbet", name: "Låda – fals (japansåg + tving)", icon: "🪚", joinery: "fals", match: /fals|japansåg|falsad låda/i, example: "Bygg en falsad låda med japansåg och tving, 40 × 30 cm och 15 cm hög" },
     { id: "boxFinger", name: "Låda – fingerskarv", icon: "🧩", joinery: "finger", match: /fingerskarv|fingertapp|fingerfog/i, example: "Bygg en låda med fingerskarvar, 40 × 30 cm och 15 cm hög" },
     { id: "boxMiter", name: "Låda – gering med kilar", icon: "🔺", joinery: "gering", match: /geringslåda|gering|låda med kilar/i, example: "Bygg en geringslåda med kilar, 40 × 30 cm och 15 cm hög" },
   ];
@@ -201,7 +202,7 @@ function boxTemplates(): Template[] {
     params: [
       mm("width", "Bredd (yttermått)", 400, 120, 1200, 5), mm("depth", "Djup (yttermått)", 300, 100, 800, 5), mm("height", "Höjd", 150, 50, 500, 5),
       { key: "joinery", label: "Hörnfog", type: "select", default: v.joinery, options: [
-        { value: "stumfog", label: "Stumfog" }, { value: "finger", label: "Fingerskarv" }, { value: "gering", label: "Gering + kilar" }] },
+        { value: "stumfog", label: "Stumfog" }, { value: "fals", label: "Fals" }, { value: "finger", label: "Fingerskarv" }, { value: "gering", label: "Gering + kilar" }] },
       { key: "bottom", label: "Botten", type: "select", default: "auto", options: [
         { value: "auto", label: "Automatiskt" }, { value: "spar", label: "I spår" }, { value: "under", label: "Underifrån" }, { value: "lister", label: "På lister" }] },
       { key: "lid", label: "Lock", type: "bool", default: false },
