@@ -1,3 +1,5 @@
+import type { Finish } from "./finish";
+
 // Alla mått i millimeter. Koordinatsystem: X = bredd (vänster→höger),
 // Y = höjd (golv = 0, uppåt), Z = djup (0 = vägg/baksida, positivt = framåt).
 
@@ -47,6 +49,8 @@ export interface Part {
   unit?: string;
   /** Infästning mot det delen hänger i: 2 skruvar (standard), 4 skruvar eller vinkelbeslag */
   fastening?: Fastening;
+  /** Ytbehandling för just den här delen (annars gruppens eller hela konstruktionens) */
+  finish?: Finish;
 }
 
 export type Fastening = "skruv2" | "skruv4" | "vinkel";
@@ -79,6 +83,8 @@ export interface Design {
   edited?: boolean;
   /** Last på ytor (kg/m²) för hållfasthetsanalysen – annars förslag utifrån projekttyp */
   loadKgM2?: number;
+  /** Ytbehandling för hela konstruktionen ("*") och per grupp ("g:<grupp>") */
+  finishes?: Record<string, Finish>;
 }
 
 export interface Workshop {

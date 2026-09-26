@@ -69,6 +69,21 @@ Fliken **Hållfasthet** räknar ut om konstruktionen bär:
 Beräkningen är förenklad (ungefärliga värden för C24/C18, spånskiva, plywood och OSB) och ersätter
 inte en konstruktionsberäkning för bärande konstruktioner som höga altaner.
 
+## Ytbehandling
+
+Fliken **Ytbehandling** gör delarna fina – för hela konstruktionen, en grupp (t.ex. alla hyllplan)
+eller markerade delar (dubbelklicka för en hel enhet):
+
+- **Kanter:** raka, fasade, rundade eller profilerade (2–10 mm) – syns som riktiga fasade/rundade kanter i 3D
+- **Slipning** i steg upp till valt korn (80–240)
+- **Behandling:** olja, vax, bets/lasyr, lack eller färg med kulörval – utseendet ändras i 3D
+- **Kantband** på skivor
+- snabbval som *Rundade kanter + olja*, *Fasat + vit färg*, *Utomhus: lasyr*
+- åtgång och kostnad (liter olja/färg/grundfärg, sandpapper per korn, kantband, fräsar), arbetstid och
+  torktid, egna byggsteg för ytbehandlingen och kantbearbetning i kapningslistan
+- varningar när verktyg saknas (rundning/profil kräver överfräs – annars hyvel/slipkloss) och när
+  behandlingen inte passar (lack/vax utomhus, kemikalier i sandlåda/odlingslåda, spånskivekanter)
+
 ## Fri redigering
 
 - Klicka på en del i 3D-vyn för att ändra namn, material, mått, position, rotation och kapvinklar
@@ -104,6 +119,7 @@ Koden i korthet:
 - `src/analysis.ts` – kapningslista, kapoptimering, skivschema och verktygskontroll
 - `src/strength.ts` – hållfasthetsanalys (last, böjning, svikt, infästningar, tipprisk)
 - `src/reinforce.ts` – förslag på förstärkning som provräknas och kan accepteras
+- `src/finish.ts` – ytbehandling: kanter, slipning, olja/vax/lasyr/lack/färg, åtgång och tid
 - `src/viewer.ts` – 3D-vyn
 - `src/ai.ts` – AI-generering via Claude
 - `src/main.ts` – gränssnittet

@@ -9,6 +9,7 @@ import { Viewer } from "./viewer";
 import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
 import { LOAD_PRESETS, analyzeStrength, defaultLoad, type MemberResult, type StrengthReport } from "./strength";
 import { autoReinforce, suggestFor, type Suggestion } from "./reinforce";
+import { COATINGS, COLORS, EDGES, PRESETS, SANDING, coatingInfo, describeFinish, effectiveFinish, finishSummary, type Finish, type FinishSummary } from "./finish";
 
 // ---------------------------------------------------------------- state
 
@@ -49,6 +50,7 @@ function initialState(): State {
   const ws = saved?.ws ?? defaultWorkshop();
   // Nya standardmaterial i senare versioner läggs till i sparade verkstäder
   for (const m of defaultMaterials()) if (!ws.materials.some((x) => x.id === m.id)) ws.materials.push(m);
+  for (const t of defaultTools()) if (!ws.tools.some((x) => x.id === t.id)) ws.tools.push(t);
   const design = saved?.design ?? shelfT.build(ws, paramsFromParsed(shelfT, parsePrompt(shelfT.example)), shelfT.example);
   return {
     ws,
@@ -150,6 +152,8 @@ function regenerate(t: Template, params: Design["params"], prompt: string) {
   const d = t.build(state.ws, params, prompt);
   if (title) d.title = title;
   if (load != null) d.loadKgM2 = load;
+  // Ytbehandling per grupp/helhet följer med när mallen byggs om
+  if (state.design.finishes && state.design.templateId === t.id) d.finishes = state.design.finishes;
   state.design = d;
   stepIdx = -1;
 }
@@ -243,7 +247,11 @@ function setSelection(ids: string[], scroll = true) {
   viewer.select(selection, moveMode);
   viewer.setHighlight([]);
   renderParts();
-  if (selection.length && scroll) switchTab("right", "parts");
+  if (finScope === "sel" || (ids.length && !body("finish").hidden)) {
+    if (ids.length && !body("finish").hidden) finScope = "sel";
+    renderFinish();
+  }
+  if (selection.length && scroll && body("finish").hidden) switchTab("right", "parts");
 }
 
 /** Flytta flera delar lika mycket (mm). */
@@ -652,6 +660,7 @@ function renderParts() {
     <div class="card" data-part="${p.id}">
       <label class="field"><span>Namn</span><input type="text" name="name" value="${esc(p.name)}"/></label>
       <div class="grid2"><label>Material<select name="materialId">${matOptions(p.materialId)}</select></label><label>Grupp<input type="text" name="group" value="${esc(p.group)}"/></label></div>
+      <div class="small muted" style="margin-top:8px">Ytbehandling: ${esc(describeFinish(effectiveFinish(d, p)))} <button class="btn ghost small" data-pact="finish">Ändra</button></div>
       <div class="actions" style="margin-top:8px">
         ${p.unit ? `<button class="btn small" data-pact="selunit">Markera hela ${esc(p.unit)}</button>` : ""}
         <button class="btn small" data-pact="selgroup">Markera alla "${esc(p.group)}"</button>
@@ -682,6 +691,7 @@ function renderParts() {
         <button class="btn small" data-pact="nudge">Flytta</button>
         ${moveBtn}
         <button class="btn small" data-pact="dup">Duplicera</button>
+        <button class="btn small" data-pact="finish">Ytbehandling …</button>
         <button class="btn small ghost" data-pact="clear">Avmarkera</button>
         <button class="btn small danger" data-pact="del" style="margin-left:auto">Ta bort alla</button>
       </div>
@@ -730,6 +740,11 @@ partsEl.addEventListener("click", (e) => {
     return renderParts();
   }
   if (act === "del") return deleteSelected();
+  if (act === "finish") {
+    finScope = "sel";
+    switchTab("right", "finish");
+    return renderFinish();
+  }
   if (act === "dup") return duplicateSelected();
   if (act === "clear") return select(null, "replace", false);
   if (act === "nudge") {
@@ -866,7 +881,7 @@ function renderCuts() {
       ${list.map((r, i) => `<tr class="click" data-cut="${esc(name)}|${i}">
         <td class="r"><strong>${r.qty}</strong></td>
         <td class="r num">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td>
-        <td>${r.rip ? `<span class="tag rip">klyv ${r.section.join("×")}</span>` : ""}${r.endCuts.some((a) => a) ? `<span class="tag ang">${r.endCuts.filter((a) => a).map((a) => `${a}°`).join(" / ")}</span>` : ""}${!r.rip && !r.endCuts.some((a) => a) ? `<span class="tag">rakt</span>` : ""}</td>
+        <td>${r.rip ? `<span class="tag rip">klyv ${r.section.join("×")}</span>` : ""}${r.endCuts.some((a) => a) ? `<span class="tag ang">${r.endCuts.filter((a) => a).map((a) => `${a}°`).join(" / ")}</span>` : ""}${r.edge ? `<span class="tag fin">${esc(r.edge)} mm</span>` : ""}${!r.rip && !r.endCuts.some((a) => a) && !r.edge ? `<span class="tag">rakt</span>` : ""}</td>
         <td class="small">${esc(r.names.slice(0, 3).join(", "))}${r.names.length > 3 ? ` +${r.names.length - 3}` : ""}</td></tr>`).join("")}
     </table>`).join("") + `<p class="small muted">Klicka på en rad för att se delarna i 3D. Mått i mm.</p>`;
   (el as HTMLElement & { _rows?: typeof byMat })._rows = byMat;
@@ -896,7 +911,8 @@ function renderBuy() {
       <tr><th>Material</th><th class="r">Antal</th><th class="r">Kostnad</th></tr>
       ${buy.map((p) => `<tr><td>${esc(p.material.name)}${p.material.available ? ` <span class="tag">har</span>` : ""}<div class="small muted">${esc(p.unitLabel)}</div></td><td class="r"><strong>${p.qty}</strong></td><td class="r">${p.cost != null ? kr(p.cost) : "–"}</td></tr>`).join("")}
       ${state.design.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="r">${fmt(h.qty)} ${esc(h.unit)}</td><td></td></tr>`).join("")}
-      <tr><td><strong>Summa material</strong> <span class="small muted">(ungefärliga priser)</span></td><td></td><td class="r"><strong>${kr(total)}</strong></td></tr>
+      ${finSummary?.items.length ? `<tr><td colspan="3" class="small muted" style="padding-top:12px"><strong>Ytbehandling</strong></td></tr>${finSummary.items.map((it) => `<tr><td>${esc(it.name)}</td><td class="r">${it.qty} ${esc(it.unit)}</td><td class="r">${it.cost ? kr(it.cost) : ""}</td></tr>`).join("")}` : ""}
+      <tr><td><strong>Summa</strong> <span class="small muted">(ungefärliga priser)</span></td><td></td><td class="r"><strong>${kr(total + (finSummary?.items.reduce((a, b) => a + b.cost, 0) ?? 0))}</strong></td></tr>
     </table>
     <div class="actions"><button class="btn small" id="copy-buy">Kopiera inköpslista</button></div>
     ${buy.map((p) => {
@@ -920,6 +936,7 @@ body("buy").addEventListener("click", (e) => {
     `Inköpslista – ${state.design.title}`,
     ...buy.map((p) => `${p.qty} × ${p.material.name} (${p.unitLabel})`),
     ...state.design.hardware.map((h) => `${h.qty} ${h.unit} ${h.name}`),
+    ...(finSummary?.items ?? []).map((it) => `${it.qty} ${it.unit} ${it.name}`),
   ];
   navigator.clipboard?.writeText(lines.join("\n")).then(() => toast("Inköpslistan är kopierad."), () => toast("Kunde inte kopiera."));
 });
@@ -931,7 +948,7 @@ function renderSteps() {
   const steps = state.design.steps;
   el.innerHTML = steps.length
     ? `<p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
-      <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
+      <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}${(finSummary?.steps ?? []).map((s) => `<li class="fin-step"><div class="t">${esc(s.title)} <span class="tag fin">ytbehandling</span></div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
       <button class="btn small" data-step="-1">Visa allt</button>`
     : `<p class="muted">Inga byggsteg.</p>`;
 }
@@ -1114,6 +1131,123 @@ function setLoad(kg: number) {
   commit(() => (state.design.loadKgM2 = kg), { keepBuild: true });
 }
 
+// ---------------------------------------------------------------- render: Ytbehandling
+
+/** Vad inställningarna gäller: "*" = allt, "g:<grupp>" = en grupp, "sel" = markerade delar */
+let finScope = "*";
+let finSummary: FinishSummary | null = null;
+const NO_FINISH: Required<Finish> = { edge: "rak", edgeSize: 0, sand: 0, coating: "ingen", color: "#f4f2ec", edgeBand: false };
+
+function scopeFinish(): Required<Finish> {
+  const d = state.design;
+  if (finScope === "sel") {
+    const p = d.parts.find((x) => x.id === selection[0]);
+    return p ? effectiveFinish(d, p) : NO_FINISH;
+  }
+  if (finScope === "*") return { ...NO_FINISH, ...(d.finishes?.["*"] ?? {}) };
+  return { ...NO_FINISH, ...(d.finishes?.["*"] ?? {}), ...(d.finishes?.[finScope] ?? {}) };
+}
+
+function setFinish(patch: Finish | null) {
+  commit(() => {
+    const d = state.design;
+    if (finScope === "sel") {
+      for (const p of d.parts) if (selection.includes(p.id)) p.finish = patch ? { ...(p.finish ?? {}), ...patch } : undefined;
+    } else {
+      d.finishes = { ...(d.finishes ?? {}) };
+      if (patch) d.finishes[finScope] = { ...(d.finishes[finScope] ?? {}), ...patch };
+      else delete d.finishes[finScope];
+    }
+  }, { keepBuild: true });
+}
+
+function renderFinish() {
+  const el = body("finish");
+  const d = state.design;
+  if (!d.parts.length) return void (el.innerHTML = `<p class="muted">Inga delar ännu.</p>`);
+  if (finScope === "sel" && !selection.length) finScope = "*";
+  if (finScope.startsWith("g:") && !d.parts.some((p) => `g:${p.group}` === finScope)) finScope = "*";
+  const f = scopeFinish();
+  const groups = [...new Set(d.parts.filter((p) => matOf(p.materialId)?.kind !== "mesh").map((p) => p.group))];
+  const chip = (on: boolean, attr: string, label: string, title = "") => `<button class="chip ${on ? "on" : ""}" ${attr} ${title ? `title="${esc(title)}"` : ""}>${label}</button>`;
+  const info = coatingInfo(f.coating);
+  const sum = finSummary!;
+  const total = sum.items.reduce((a, b) => a + b.cost, 0);
+  const own = d.parts.filter((p) => p.finish).length;
+  el.innerHTML = `
+    <h3 style="margin-top:0">Gäller</h3>
+    <div class="actions" style="margin-top:0">
+      ${chip(finScope === "*", 'data-scope="*"', "Hela konstruktionen")}
+      ${chip(finScope === "sel", `data-scope="sel" ${selection.length ? "" : "disabled"}`, `Markerade delar${selection.length ? ` (${selection.length})` : ""}`, "Markera delar i 3D-vyn (dubbelklick = hel enhet)")}
+      <select id="fin-group" style="width:auto;flex:1;min-width:140px"><option value="">Grupp …</option>${groups.map((g) => `<option value="g:${esc(g)}" ${finScope === `g:${g}` ? "selected" : ""}>${esc(g)}</option>`).join("")}</select>
+    </div>
+    <h3>Snabbval</h3>
+    <div class="actions" style="margin-top:0">${PRESETS.map((p, i) => chip(false, `data-preset-fin="${i}"`, esc(p.name))).join("")}</div>
+
+    <h3>Kanter</h3>
+    <div class="actions" style="margin-top:0">${EDGES.map((e) => chip(f.edge === e.id, `data-edge="${e.id}"`, e.name, e.desc)).join("")}</div>
+    ${f.edge !== "rak" ? `<div class="actions">${[2, 3, 4, 6, 10].map((n) => chip(f.edgeSize === n, `data-esize="${n}"`, `${n} mm`)).join("")}</div>
+      <p class="small muted">${esc(EDGES.find((e) => e.id === f.edge)!.desc)}</p>` : ""}
+
+    <h3>Slipning</h3>
+    <div class="actions" style="margin-top:0">${SANDING.map((g) => chip(f.sand === g, `data-sand="${g}"`, g ? `Korn ${g}` : "Ingen")).join("")}</div>
+
+    <h3>Behandling</h3>
+    <div class="actions" style="margin-top:0">${COATINGS.map((c) => chip(f.coating === c.id, `data-coat="${c.id}"`, c.name, c.desc)).join("")}</div>
+    <p class="small muted">${esc(info.desc)}${info.coats ? ` ${info.coats} lager.` : ""}</p>
+    ${info.hasColor ? `<div class="swatches">${COLORS.map((c) => `<button class="swatch-btn ${f.color === c.hex ? "on" : ""}" data-color="${c.hex}" title="${c.name}" style="background:${c.hex}"></button>`).join("")}<input type="color" id="fin-color" value="${f.color}" title="Egen kulör"/></div>` : ""}
+    <label class="switch" style="margin-top:10px"><input type="checkbox" id="fin-band" ${f.edgeBand ? "checked" : ""}/> Kantband på skivornas kanter</label>
+    <div class="actions"><button class="btn ghost small" id="fin-reset">Ta bort behandling för ${finScope === "*" ? "hela konstruktionen" : finScope === "sel" ? "markerade delar" : `gruppen ${esc(finScope.slice(2))}`}</button></div>
+
+    <h3>Åtgång & kostnad</h3>
+    ${sum.items.length ? `<table class="tbl">${sum.items.map((it) => `<tr><td>${esc(it.name)}</td><td class="r">${it.qty} ${esc(it.unit)}</td><td class="r">${it.cost ? kr(it.cost) : ""}</td></tr>`).join("")}
+      <tr><td><strong>Summa</strong></td><td></td><td class="r"><strong>${kr(total)}</strong></td></tr></table>
+      <p class="small muted">Behandlad yta ca ${sum.area} m² · arbetstid ca ${sum.hours} h${sum.dryHours ? ` + torktid ca ${sum.dryHours} h` : ""}.</p>` : `<p class="small muted">Ingen ytbehandling vald.</p>`}
+    ${sum.warnings.map((w, i) => `<div class="warn-item ${w.level}" data-finwarn="${i}"><span>${w.level === "warn" ? "⚠️" : "ℹ️"}</span><span>${esc(w.text)}</span><span class="cnt">${w.partIds.length} del${w.partIds.length > 1 ? "ar" : ""}</span></div>`).join("")}
+
+    <h3>I konstruktionen</h3>
+    <ul class="notes small">
+      <li>Hela: ${esc(describeFinish({ ...NO_FINISH, ...(d.finishes?.["*"] ?? {}) }))}</li>
+      ${Object.entries(d.finishes ?? {}).filter(([k]) => k.startsWith("g:")).map(([k, v]) => `<li>Gruppen ${esc(k.slice(2))}: ${esc(describeFinish({ ...NO_FINISH, ...(d.finishes?.["*"] ?? {}), ...v }))}</li>`).join("")}
+      ${own ? `<li>${own} del${own > 1 ? "ar" : ""} med egen behandling</li>` : ""}
+    </ul>
+    <label class="switch"><input type="checkbox" id="fin-show" ${viewer.showFinish ? "checked" : ""}/> Visa ytbehandling i 3D</label>`;
+}
+
+const finEl = body("finish");
+finEl.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-finwarn]");
+  if (!b) return;
+  const ds = b.dataset;
+  if (ds.scope) {
+    finScope = ds.scope;
+    return renderFinish();
+  }
+  if (ds.presetFin) return setFinish({ ...PRESETS[+ds.presetFin].finish });
+  if (ds.edge) return setFinish({ edge: ds.edge as Finish["edge"], edgeSize: ds.edge === "rak" ? 0 : scopeFinish().edgeSize || 3 });
+  if (ds.esize) return setFinish({ edgeSize: +ds.esize });
+  if (ds.sand) return setFinish({ sand: +ds.sand });
+  if (ds.coat) return setFinish({ coating: ds.coat as Finish["coating"] });
+  if (ds.color) return setFinish({ color: ds.color });
+  if (b.id === "fin-reset") return setFinish(null);
+  if (ds.finwarn) {
+    const ids = finSummary?.warnings[+ds.finwarn]?.partIds ?? [];
+    viewer.setHighlight(ids);
+  }
+});
+finEl.addEventListener("change", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.id === "fin-group" && t.value) {
+    finScope = t.value;
+    renderFinish();
+  } else if (t.id === "fin-color") setFinish({ color: t.value });
+  else if (t.id === "fin-band") setFinish({ edgeBand: t.checked });
+  else if (t.id === "fin-show") {
+    viewer.setShowFinish(t.checked);
+    applySteps();
+  }
+});
+
 // ---------------------------------------------------------------- render: allt
 
 function setBadge() {
@@ -1127,7 +1261,8 @@ function setBadge() {
 
 function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   const d = state.design;
-  warnings = checkDesign(d, state.ws);
+  finSummary = finishSummary(d, state.ws);
+  warnings = [...checkDesign(d, state.ws), ...finSummary.warnings];
   strength = analyzeStrength(d, state.ws);
   sugCache = new Map();
   viewer.setHeatmap(heatOn ? new Map(strength.members.map((m) => [m.id, m.util])) : null, false);
@@ -1145,6 +1280,7 @@ function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   renderBuy();
   renderSteps();
   renderStrength();
+  renderFinish();
   setBadge();
   $("#empty").hidden = d.parts.length > 0;
   ($("#undo") as HTMLButtonElement).disabled = !undoStack.length;
@@ -1271,9 +1407,10 @@ function printView() {
   div.className = "print-only";
   div.innerHTML = `<h1>${esc(d.title)}</h1><img src="${img}" alt="3D-vy"/>
     <h2>Kapningslista</h2><table class="tbl"><tr><th>Material</th><th class="r">St</th><th class="r">Mått (mm)</th><th>Bearbetning</th><th>Delar</th></tr>
-    ${rows.map((r) => `<tr><td>${esc(r.materialName)}</td><td class="r">${r.qty}</td><td class="r">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td><td>${r.rip ? `klyv ${r.section.join("×")} ` : ""}${r.endCuts.some((a) => a) ? r.endCuts.join("/") + "°" : ""}</td><td>${esc(r.names.join(", "))}</td></tr>`).join("")}</table>
+    ${rows.map((r) => `<tr><td>${esc(r.materialName)}</td><td class="r">${r.qty}</td><td class="r">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td><td>${r.rip ? `klyv ${r.section.join("×")} ` : ""}${r.endCuts.some((a) => a) ? r.endCuts.join("/") + "° " : ""}${r.edge ? `kant ${esc(r.edge)} mm` : ""}</td><td>${esc(r.names.join(", "))}</td></tr>`).join("")}</table>
     <h2>Inköp</h2><ul>${buy.map((p) => `<li>${p.qty} × ${esc(p.material.name)} (${esc(p.unitLabel)})</li>`).join("")}${d.hardware.map((h) => `<li>${h.qty} ${esc(h.unit)} ${esc(h.name)}</li>`).join("")}</ul>
-    <h2>Byggsteg</h2><ol>${d.steps.map((s) => `<li><strong>${esc(s.title)}</strong> – ${esc(s.text)}</li>`).join("")}</ol>
+    ${finSummary?.items.length ? `<h2>Ytbehandling</h2><ul>${finSummary.items.map((it) => `<li>${it.qty} ${esc(it.unit)} ${esc(it.name)}</li>`).join("")}</ul>` : ""}
+    <h2>Byggsteg</h2><ol>${[...d.steps, ...(finSummary?.steps ?? [])].map((s) => `<li><strong>${esc(s.title)}</strong> – ${esc(s.text)}</li>`).join("")}</ol>
     ${d.notes.length ? `<h2>Att tänka på</h2><ul>${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
   document.body.appendChild(div);
   const done = () => div.remove();

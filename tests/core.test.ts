@@ -359,3 +359,44 @@ describe("förstärkning", () => {
     expect(uV).toBeLessThan(u2);
   });
 });
+
+import { effectiveFinish, finishSummary } from "../src/finish";
+describe("ytbehandling", () => {
+  const build = (id: string) => {
+    const t = TEMPLATES.find((x) => x.id === id)!;
+    const ws = defaultWorkshop();
+    return { ws, d: t.build(ws, paramsFromParsed(t, parsePrompt(t.example)), "") };
+  };
+  it("del → grupp → helhet", () => {
+    const { d } = build("bench");
+    d.finishes = { "*": { coating: "olja", sand: 120 }, "g:sits": { edge: "rundad", edgeSize: 6 } };
+    const seat = d.parts.find((p) => p.group === "sits")!;
+    const leg = d.parts.find((p) => p.group === "ben")!;
+    expect(effectiveFinish(d, seat)).toMatchObject({ coating: "olja", sand: 120, edge: "rundad", edgeSize: 6 });
+    expect(effectiveFinish(d, leg)).toMatchObject({ coating: "olja", edge: "rak" });
+    leg.finish = { coating: "farg", color: "#2b2b2b" };
+    expect(effectiveFinish(d, leg).coating).toBe("farg");
+  });
+  it("räknar åtgång, tid och byggsteg", () => {
+    const { d, ws } = build("coffeeTable");
+    d.finishes = { "*": { coating: "farg", color: "#f4f2ec", sand: 120, edge: "fas", edgeSize: 3 } };
+    const s = finishSummary(d, ws);
+    expect(s.items.some((i) => i.name.startsWith("Färg") && i.unit === "l")).toBe(true);
+    expect(s.items.some((i) => i.name === "Grundfärg")).toBe(true);
+    expect(s.items.some((i) => i.name === "Sandpapper korn 80")).toBe(true);
+    expect(s.hours).toBeGreaterThan(0);
+    expect(s.steps.map((x) => x.title)).toEqual(expect.arrayContaining(["Kanter", "Slipning", "Färg"]));
+  });
+  it("varnar för lack utomhus och profilfräsning utan överfräs", () => {
+    const { d, ws } = build("deck");
+    d.finishes = { "*": { coating: "lack", edge: "profil", edgeSize: 6 } };
+    const w = finishSummary(d, ws).warnings.map((x) => x.text).join(" ");
+    expect(w).toMatch(/passar inte utomhus/);
+    expect(w).toMatch(/överfräs/);
+  });
+  it("kantbearbetning syns i kapningslistan", () => {
+    const { d, ws } = build("bench");
+    d.finishes = { "g:sits": { edge: "rundad", edgeSize: 6 } };
+    expect(cutList(d, ws).some((r) => r.edge === "rundad 6")).toBe(true);
+  });
+});
