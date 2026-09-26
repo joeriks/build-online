@@ -22,6 +22,7 @@ const DesignSchema = z.object({
       rot: vec,
       endCuts: z.array(z.number()),
       group: z.string(),
+      unit: z.string(),
     }),
   ),
   steps: z.array(z.object({ title: z.string(), text: z.string(), groups: z.array(z.string()) })),
@@ -52,6 +53,7 @@ MATERIAL OCH VERKTYG
 KONSTRUKTION
 - Delarna ska ligga an mot varandra (inga svävande delar) och inte överlappa i onödan.
 - Bygg stabilt och realistiskt, som en riktig snickare skulle göra. Tänk på bärighet, spännvidder och förankring.
+- "unit": delar som hör ihop fysiskt och kan flyttas som en enhet (t.ex. "Fack 2", "Gavel 1", "Låda 3", "Dörrblad") får samma unit. Tom sträng om delen inte hör till någon enhet.
 - Ge varje del ett tydligt svenskt namn, och en "group" (t.ex. "stolpar", "reglar", "hyllplan"). Byggstegen refererar till grupperna i monteringsordning.
 - Om konstruktionen står mot en vägg: sätt wall.present = true och ange väggens bredd/höjd, annars present=false och 0 som mått.
 - "reply": 1–3 meningar till användaren om vad du byggt eller ändrat och viktiga val du gjort.`;
@@ -85,7 +87,7 @@ export async function aiDesign(
   if (current && current.parts.length) {
     const compact = {
       title: current.title,
-      parts: current.parts.map(({ id: _id, ...p }) => p),
+      parts: current.parts.map(({ id: _id, ...p }) => ({ ...p, unit: p.unit ?? "" })),
       steps: current.steps,
       hardware: current.hardware,
       notes: current.notes,
@@ -134,6 +136,7 @@ export async function aiDesign(
         rot: p.rot,
         endCuts: [p.endCuts[0] ?? 0, p.endCuts[1] ?? 0],
         group: p.group,
+        ...(p.unit ? { unit: p.unit } : {}),
       })),
     steps: d.steps,
     hardware: d.hardware,

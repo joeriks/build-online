@@ -7,6 +7,10 @@ import { parsePrompt, paramsFromParsed, type Parsed } from "./parse";
 import { bounds, checkDesign, cutList, partShape, purchases, type Warning } from "./analysis";
 import { Viewer } from "./viewer";
 import { AI_MODELS, aiDesign, aiErrorMessage, type AiSettings } from "./ai";
+import { LOAD_PRESETS, analyzeStrength, defaultLoad, type MemberResult, type StrengthReport } from "./strength";
+import { autoReinforce, suggestFor, type Suggestion } from "./reinforce";
+import { GUIDES, guideById } from "./joinery";
+import { COATINGS, COLORS, EDGES, PRESETS, SANDING, coatingInfo, describeFinish, effectiveFinish, finishSummary, type Finish, type FinishSummary } from "./finish";
 
 // ---------------------------------------------------------------- state
 
@@ -45,6 +49,9 @@ function initialState(): State {
   const saved = safeGet<Partial<State> | null>(KEY, null);
   const shelfT = TEMPLATES[0];
   const ws = saved?.ws ?? defaultWorkshop();
+  // Nya standardmaterial i senare versioner läggs till i sparade verkstäder
+  for (const m of defaultMaterials()) if (!ws.materials.some((x) => x.id === m.id)) ws.materials.push(m);
+  for (const t of defaultTools()) if (!ws.tools.some((x) => x.id === t.id)) ws.tools.push(t);
   const design = saved?.design ?? shelfT.build(ws, paramsFromParsed(shelfT, parsePrompt(shelfT.example)), shelfT.example);
   return {
     ws,
@@ -57,7 +64,8 @@ function initialState(): State {
 
 const state = initialState();
 if (!state.design.prompt) state.design.prompt = "";
-let selected: string | null = null;
+/** Markerade delar (id). Flera = hel enhet, t.ex. ett fack. */
+let selection: string[] = [];
 let moveMode = false;
 let stepIdx = -1;
 let lastParsed: Parsed | null = null;
@@ -83,7 +91,7 @@ function commit(fn: () => void, opts: { fit?: boolean; keepBuild?: boolean } = {
 }
 
 function afterChange(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
-  if (selected && !state.design.parts.some((p) => p.id === selected)) selected = null;
+  if (selection.length) selection = selection.filter((id) => state.design.parts.some((p) => p.id === id));
   if (stepIdx >= state.design.steps.length) stepIdx = -1;
   persist();
   renderAll(opts);
@@ -140,8 +148,13 @@ function slug(s: string) {
 
 function regenerate(t: Template, params: Design["params"], prompt: string) {
   const title = state.customTitle ? state.design.title : null;
+  // Behåll vald last för hållfasthetsanalysen när samma mall byggs om
+  const load = state.design.templateId === t.id ? state.design.loadKgM2 : undefined;
   const d = t.build(state.ws, params, prompt);
   if (title) d.title = title;
+  if (load != null) d.loadKgM2 = load;
+  // Ytbehandling per grupp/helhet följer med när mallen byggs om
+  if (state.design.finishes && state.design.templateId === t.id) d.finishes = state.design.finishes;
   state.design = d;
   stepIdx = -1;
 }
@@ -201,13 +214,8 @@ async function runAi(text?: string) {
 // ---------------------------------------------------------------- viewer
 
 const viewer = new Viewer($("#viewport"), {
-  onSelect: (id) => select(id),
-  onMove: (id, pos) =>
-    commit(() => {
-      const p = state.design.parts.find((x) => x.id === id);
-      if (p) p.pos = pos;
-      state.design.edited = true;
-    }),
+  onSelect: (id, mode) => select(id, mode),
+  onMove: (ids, delta) => moveParts(ids, delta),
   onHover: (part, x, y) => {
     const tip = $("#tooltip");
     if (!part) return void (tip.hidden = true);
@@ -220,12 +228,45 @@ const viewer = new Viewer($("#viewport"), {
   },
 });
 
-function select(id: string | null, scroll = true) {
-  selected = id;
-  viewer.select(id, moveMode);
+/** Delar som hör till samma enhet (t.ex. "Fack 2") – eller samma grupp om delen saknar enhet. */
+function unitMates(id: string): string[] {
+  const p = state.design.parts.find((x) => x.id === id);
+  if (!p) return [];
+  return state.design.parts.filter((x) => (p.unit ? x.unit === p.unit : x.group === p.group)).map((x) => x.id);
+}
+
+function select(id: string | null, mode: "replace" | "toggle" | "unit" = "replace", scroll = true) {
+  if (!id) selection = [];
+  else if (mode === "toggle") selection = selection.includes(id) ? selection.filter((x) => x !== id) : [...selection, id];
+  else if (mode === "unit") selection = unitMates(id);
+  else selection = [id];
+  setSelection(selection, scroll);
+}
+
+function setSelection(ids: string[], scroll = true) {
+  selection = ids;
+  viewer.select(selection, moveMode);
   viewer.setHighlight([]);
   renderParts();
-  if (id && scroll) switchTab("right", "parts");
+  if (finScope === "sel" || (ids.length && !body("finish").hidden)) {
+    if (ids.length && !body("finish").hidden) finScope = "sel";
+    renderFinish();
+  }
+  if (selection.length && scroll && body("finish").hidden) switchTab("right", "parts");
+}
+
+/** Flytta flera delar lika mycket (mm). */
+function moveParts(ids: string[], delta: { x: number; y: number; z: number }) {
+  const set = new Set(ids);
+  commit(() => {
+    for (const p of state.design.parts)
+      if (set.has(p.id)) {
+        p.pos.x += delta.x;
+        p.pos.y += delta.y;
+        p.pos.z += delta.z;
+      }
+    state.design.edited = true;
+  });
 }
 
 function applySteps() {
@@ -269,7 +310,8 @@ function renderBuild() {
     if (lastParsed.template) bits.push(`<strong>${esc(lastParsed.template.name)}</strong>`);
     const names: Record<string, string> = { width: "bredd", height: "höjd", depth: "djup", length: "längd" };
     for (const [k, v] of Object.entries(lastParsed.dims)) bits.push(`${names[k]} ${fmt(v!)} mm`);
-    if (lastParsed.count != null && lastParsed.template?.params.some((p) => ["shelves", "drawers"].includes(p.key))) bits.push(`antal ${lastParsed.count}`);
+    if (lastParsed.count != null && lastParsed.template?.params.some((p) => ["shelves", "drawers", "levels"].includes(p.key))) bits.push(`antal ${lastParsed.count}`);
+    if (lastParsed.hole != null && lastParsed.template?.id === "birdHouse") bits.push(`hål Ø${lastParsed.hole} mm`);
     if (lastParsed.againstWall != null) bits.push(lastParsed.againstWall ? "mot vägg" : "fristående");
     if (lastParsed.door != null) bits.push(lastParsed.door ? "med dörr" : "utan dörr");
     interp = `<div class="interp">Tolkat: ${bits.join(" · ") || "<em>inget känt</em>"}</div>`;
@@ -303,7 +345,10 @@ function renderBuild() {
     </details>`}`;
 }
 
-function paramHtml(p: Template["params"][number], v: number | boolean | undefined) {
+function paramHtml(p: Template["params"][number], v: number | boolean | string | undefined) {
+  if (p.type === "select")
+    return `<div class="param"><div class="head"><span>${esc(p.label)}</span></div><div class="actions" style="margin-top:4px">${(p.options ?? [])
+      .map((o) => `<button class="chip ${String(v ?? p.default) === o.value ? "on" : ""}" data-param-select="${p.key}" data-value="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div></div>`;
   if (p.type === "bool")
     return `<label class="switch"><input type="checkbox" data-param="${p.key}" ${v ? "checked" : ""}/> ${esc(p.label)}</label>`;
   const val = Number(v ?? p.default);
@@ -314,6 +359,14 @@ function paramHtml(p: Template["params"][number], v: number | boolean | undefine
 const buildEl = body("build");
 buildEl.addEventListener("click", (e) => {
   const tgt = e.target as HTMLElement;
+  const sel = tgt.closest<HTMLElement>("[data-param-select]");
+  if (sel) {
+    const t = templateById(state.design.templateId);
+    if (!t) return;
+    const params = { ...state.design.params, [sel.dataset.paramSelect!]: sel.dataset.value! };
+    commit(() => regenerate(t, params, state.design.prompt));
+    return;
+  }
   if (tgt.closest("#go")) runPrompt();
   else if (tgt.closest("#ai-go")) runAi();
   else if (tgt.closest("#regen")) {
@@ -567,28 +620,35 @@ function renderOverview() {
   const buy = purchases(d, state.ws);
   const cost = buy.reduce((s, p) => s + (p.cost ?? 0), 0);
   const lin = buy.filter((p) => p.material.kind === "linear").reduce((s, p) => s + (p.totalLength ?? 0), 0);
+  const sheets = buy.filter((p) => p.material.kind === "sheet").reduce((s, p) => s + p.qty, 0);
   const b = bounds(d.parts);
   const size = d.parts.length ? `${fmt(b.max.x - b.min.x)} × ${fmt(b.max.z - b.min.z)} × ${fmt(b.max.y - b.min.y)} mm` : "–";
   el.innerHTML = `
     <div class="stats">
       <div class="stat"><div class="v">${d.parts.length}</div><div class="k">delar</div></div>
-      <div class="stat"><div class="v">${(lin / 1000).toFixed(1)} m</div><div class="k">virke</div></div>
+      ${lin || !sheets ? `<div class="stat"><div class="v">${(lin / 1000).toFixed(1)} m</div><div class="k">virke</div></div>` : `<div class="stat"><div class="v">${sheets}</div><div class="k">skivor</div></div>`}
       <div class="stat"><div class="v">${cost ? kr(cost) : "–"}</div><div class="k">ca materialkostnad</div></div>
     </div>
     <div class="small muted">Yttermått (B × D × H): <span class="num">${size}</span></div>
     ${warnings.length ? `<h3>Kontroll av material & verktyg</h3>${warnings.map((w, i) => `
       <div class="warn-item ${w.level}" data-warn="${i}"><span>${w.level === "error" ? "⛔" : w.level === "warn" ? "⚠️" : "ℹ️"}</span><span>${esc(w.text)}</span>${w.partIds.length ? `<span class="cnt">${w.partIds.length} del${w.partIds.length > 1 ? "ar" : ""}</span>` : ""}</div>`).join("")}` : d.parts.length ? `<h3>Kontroll</h3><div class="warn-item info">✅ Allt kan byggas med dina material och verktyg.</div>` : ""}
+    ${strength && strength.members.length ? (() => {
+      const over = strength.members.filter((m) => m.util > 1).length;
+      const u = strength.worst!.util;
+      return `<h3>Hållfasthet</h3><div class="warn-item ${over ? "error" : u > 0.8 ? "warn" : "info"}" data-goto="strength"><span>${over ? "⛔" : u > 0.8 ? "⚠️" : "✅"}</span><span>${over ? `För svagt på ${over} ställe${over > 1 ? "n" : ""}` : u > 0.8 ? "Håller, men nära gränsen" : "Håller"} vid ${strength.loadKgM2} kg/m² – högsta utnyttjande ${Math.round(u * 100)} %.</span><span class="cnt">Visa →</span></div>`;
+    })() : ""}
     ${d.notes.length ? `<h3>Att tänka på</h3><ul class="notes">${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
     ${d.hardware.length ? `<h3>Skruv & beslag (ca)</h3><table class="tbl">${d.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="r">${fmt(h.qty)} ${esc(h.unit)}</td></tr>`).join("")}</table>` : ""}`;
 }
 
 body("overview").addEventListener("click", (e) => {
+  if ((e.target as HTMLElement).closest("[data-goto]")) return switchTab("right", "strength");
   const w = (e.target as HTMLElement).closest<HTMLElement>("[data-warn]");
   if (!w) return;
   const ids = warnings[+w.dataset.warn!]?.partIds ?? [];
   if (ids.length) {
-    selected = null;
-    viewer.select(null, false);
+    selection = [];
+    viewer.select([], false);
     viewer.setHighlight(ids);
     toast(`Markerat ${ids.length} del${ids.length > 1 ? "ar" : ""} i 3D-vyn.`);
   }
@@ -599,14 +659,24 @@ body("overview").addEventListener("click", (e) => {
 function renderParts() {
   const d = state.design;
   const el = body("parts");
-  const p = d.parts.find((x) => x.id === selected);
+  const sel = new Set(selection);
+  const p = selection.length === 1 ? d.parts.find((x) => x.id === selection[0]) : undefined;
   const matOptions = (cur: string) =>
     state.ws.materials.map((m) => `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${esc(m.name)}${m.available ? "" : " (ej tillg.)"}</option>`).join("");
   const num = (name: string, v: number, label: string) => `<label>${label}<input type="number" name="${name}" value="${Math.round(v * 10) / 10}" step="1"/></label>`;
-  const editor = p ? `
+  const moveBtn = `<button class="btn small ${moveMode ? "primary" : ""}" data-pact="move">✥ Flytta i 3D</button>`;
+
+  let editor: string;
+  if (p) {
+    editor = `
     <div class="card" data-part="${p.id}">
       <label class="field"><span>Namn</span><input type="text" name="name" value="${esc(p.name)}"/></label>
       <div class="grid2"><label>Material<select name="materialId">${matOptions(p.materialId)}</select></label><label>Grupp<input type="text" name="group" value="${esc(p.group)}"/></label></div>
+      <div class="small muted" style="margin-top:8px">Ytbehandling: ${esc(describeFinish(effectiveFinish(d, p)))} <button class="btn ghost small" data-pact="finish">Ändra</button></div>
+      <div class="actions" style="margin-top:8px">
+        ${p.unit ? `<button class="btn small" data-pact="selunit">Markera hela ${esc(p.unit)}</button>` : ""}
+        <button class="btn small" data-pact="selgroup">Markera alla "${esc(p.group)}"</button>
+      </div>
       <h3>Storlek (mm)</h3><div class="grid3">${num("dims.x", p.dims.x, "X (bredd)")}${num("dims.y", p.dims.y, "Y (höjd)")}${num("dims.z", p.dims.z, "Z (djup)")}</div>
       <h3>Position – mittpunkt (mm)</h3><div class="grid3">${num("pos.x", p.pos.x, "X")}${num("pos.y", p.pos.y, "Y")}${num("pos.z", p.pos.z, "Z")}</div>
       <h3>Rotation (°) & vinkelkap</h3><div class="grid3">${num("rot.x", p.rot.x, "Rot X")}${num("rot.y", p.rot.y, "Rot Y")}${num("rot.z", p.rot.z, "Rot Z")}</div>
@@ -614,20 +684,53 @@ function renderParts() {
       <div class="actions">
         <button class="btn small" data-pact="dup">Duplicera</button>
         <button class="btn small" data-pact="rotate">Vrid 90°</button>
-        <button class="btn small ${moveMode ? "primary" : ""}" data-pact="move">✥ Flytta i 3D</button>
+        ${moveBtn}
         <button class="btn small danger" data-pact="del" style="margin-left:auto">Ta bort</button>
       </div>
-      <p class="small muted" style="margin:8px 0 0">Tips: piltangenter flyttar 10 mm (Shift = 100 mm), PgUp/PgDn i höjd, Delete tar bort.</p>
-    </div>` : `<p class="small muted" style="margin-top:0">Klicka på en del i 3D-vyn eller i listan för att ändra den.</p>`;
+    </div>`;
+  } else if (selection.length > 1) {
+    const parts = d.parts.filter((x) => sel.has(x.id));
+    const units = [...new Set(parts.map((x) => x.unit ?? "–"))];
+    const label = units.length === 1 && units[0] !== "–" ? esc(units[0]) : `${parts.length} delar`;
+    const b = bounds(parts);
+    editor = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between"><strong>${label}</strong><span class="small muted">${parts.length} delar markerade</span></div>
+      <div class="small muted" style="margin-top:4px">${fmt(b.max.x - b.min.x)} × ${fmt(b.max.z - b.min.z)} × ${fmt(b.max.y - b.min.y)} mm (B × D × H)</div>
+      <h3>Flytta alla (mm)</h3>
+      <div class="grid3"><label>ΔX<input type="number" id="dx" value="0" step="10"/></label><label>ΔY<input type="number" id="dy" value="0" step="10"/></label><label>ΔZ<input type="number" id="dz" value="0" step="10"/></label></div>
+      <div class="actions">
+        <button class="btn small" data-pact="nudge">Flytta</button>
+        ${moveBtn}
+        <button class="btn small" data-pact="dup">Duplicera</button>
+        <button class="btn small" data-pact="finish">Ytbehandling …</button>
+        <button class="btn small ghost" data-pact="clear">Avmarkera</button>
+        <button class="btn small danger" data-pact="del" style="margin-left:auto">Ta bort alla</button>
+      </div>
+    </div>`;
+  } else editor = `<p class="small muted" style="margin-top:0">Klicka på en del i 3D-vyn eller i listan för att ändra den. <strong>Dubbelklicka</strong> för att markera hela enheten (t.ex. ett fack) och Shift-klicka för att lägga till eller ta bort delar.</p>`;
+
+  // Snabbval av enheter (fack, gavlar, lådor …)
+  const units: string[] = [];
+  for (const x of d.parts) if (x.unit && !units.includes(x.unit)) units.push(x.unit);
+  const unitChips = units.length
+    ? `<h3>Markera enhet</h3><div class="actions" style="margin-top:0">${units.map((u) => {
+        const ids = d.parts.filter((x) => x.unit === u).map((x) => x.id);
+        const on = ids.length === selection.length && ids.every((id) => sel.has(id));
+        return `<button class="chip ${on ? "on" : ""}" data-unit="${esc(u)}">${esc(u)}</button>`;
+      }).join("")}</div>`
+    : "";
 
   const groups = new Map<string, Part[]>();
   for (const x of d.parts) groups.set(x.group, [...(groups.get(x.group) ?? []), x]);
   el.innerHTML = `${editor}
+    ${unitChips}
+    <p class="small muted" style="margin:10px 0 0">Piltangenter flyttar markeringen 10 mm (Shift = 100 mm), PgUp/PgDn i höjd, Delete tar bort.</p>
     <div class="actions" style="margin:8px 0 4px"><button class="btn small" id="part-add">+ Ny del</button></div>
     ${[...groups].map(([g, list]) => `<h3>${esc(g)} (${list.length})</h3><table class="tbl">${list.map((x) => {
       const m = matOf(x.materialId);
       const s = m ? partShape(x, m) : null;
-      return `<tr class="click ${x.id === selected ? "sel" : ""}" data-sel="${x.id}"><td>${esc(x.name)}<div class="small muted">${esc(m?.name ?? "?")}</div></td><td class="r small">${s ? (m!.kind === "linear" ? `${fmt(s.length)} mm` : `${fmt(s.length)}×${fmt(s.section[1])}`) : ""}</td></tr>`;
+      return `<tr class="click ${sel.has(x.id) ? "sel" : ""}" data-sel="${x.id}"><td>${esc(x.name)}<div class="small muted">${esc(m?.name ?? "?")}${x.unit ? ` · ${esc(x.unit)}` : ""}</div></td><td class="r small">${s ? (m!.kind === "linear" ? `${fmt(s.length)} mm` : `${fmt(s.length)}×${fmt(s.section[1])}`) : ""}</td></tr>`;
     }).join("")}</table>`).join("")}`;
 }
 
@@ -635,35 +738,43 @@ const partsEl = body("parts");
 partsEl.addEventListener("click", (e) => {
   const tgt = e.target as HTMLElement;
   const row = tgt.closest<HTMLElement>("[data-sel]");
-  if (row) return select(row.dataset.sel!, false);
+  if (row) return select(row.dataset.sel!, e.shiftKey || e.ctrlKey || e.metaKey ? "toggle" : "replace", false);
+  const chip = tgt.closest<HTMLElement>("[data-unit]");
+  if (chip) return setSelection(state.design.parts.filter((x) => x.unit === chip.dataset.unit).map((x) => x.id), false);
   const b = tgt.closest<HTMLElement>("button");
   if (!b) return;
   if (b.id === "part-add") return addPart();
   const act = b.dataset.pact;
-  const p = state.design.parts.find((x) => x.id === selected);
+  if (act === "move") {
+    moveMode = !moveMode;
+    $("#v-move").classList.toggle("on", moveMode);
+    viewer.select(selection, moveMode);
+    return renderParts();
+  }
+  if (act === "del") return deleteSelected();
+  if (act === "finish") {
+    finScope = "sel";
+    switchTab("right", "finish");
+    return renderFinish();
+  }
+  if (act === "dup") return duplicateSelected();
+  if (act === "clear") return select(null, "replace", false);
+  if (act === "nudge") {
+    const v = (id: string) => Number(($(`#${id}`) as HTMLInputElement).value) || 0;
+    const delta = { x: v("dx"), y: v("dy"), z: v("dz") };
+    if (delta.x || delta.y || delta.z) moveParts(selection, delta);
+    return;
+  }
+  const p = selection.length === 1 ? state.design.parts.find((x) => x.id === selection[0]) : undefined;
   if (!p) return;
-  if (act === "del") deleteSelected();
-  else if (act === "dup") {
-    const c: Part = JSON.parse(JSON.stringify(p));
-    c.id = newId();
-    c.name = `${p.name} (kopia)`;
-    c.pos.x += Math.max(50, p.dims.x + 20);
-    commit(() => {
-      state.design.parts.push(c);
-      state.design.edited = true;
-    });
-    select(c.id);
-  } else if (act === "rotate") {
+  if (act === "selunit" && p.unit) setSelection(unitMates(p.id), false);
+  else if (act === "selgroup") setSelection(state.design.parts.filter((x) => x.group === p.group).map((x) => x.id), false);
+  else if (act === "rotate") {
     commit(() => {
       // vrid 90° runt Y genom att byta X och Z
       [p.dims.x, p.dims.z] = [p.dims.z, p.dims.x];
       state.design.edited = true;
     });
-  } else if (act === "move") {
-    moveMode = !moveMode;
-    $("#v-move").classList.toggle("on", moveMode);
-    viewer.select(selected, moveMode);
-    renderParts();
   }
 });
 partsEl.addEventListener("change", (e) => {
@@ -714,13 +825,45 @@ function addPart() {
 }
 
 function deleteSelected() {
-  if (!selected) return;
-  const id = selected;
-  selected = null;
+  if (!selection.length) return;
+  const ids = new Set(selection);
+  selection = [];
   commit(() => {
-    state.design.parts = state.design.parts.filter((x) => x.id !== id);
+    state.design.parts = state.design.parts.filter((x) => !ids.has(x.id));
     state.design.edited = true;
   });
+}
+
+/** Duplicera markeringen och lägg kopian bredvid (enheter får eget namn så de hänger ihop). */
+function duplicateSelected() {
+  const src = state.design.parts.filter((x) => selection.includes(x.id));
+  if (!src.length) return;
+  const b = bounds(src);
+  const dx = Math.round(b.max.x - b.min.x + 100);
+  const units = new Map<string, string>();
+  const copies = src.map((p) => {
+    const c: Part = JSON.parse(JSON.stringify(p));
+    c.id = newId();
+    c.name = src.length > 1 ? p.name : `${p.name} (kopia)`;
+    c.pos.x += dx;
+    if (p.unit) {
+      if (!units.has(p.unit)) units.set(p.unit, uniqueUnit(`${p.unit} kopia`));
+      c.unit = units.get(p.unit);
+    }
+    return c;
+  });
+  commit(() => {
+    state.design.parts.push(...copies);
+    state.design.edited = true;
+  });
+  setSelection(copies.map((c) => c.id));
+}
+
+function uniqueUnit(base: string) {
+  const used = new Set(state.design.parts.map((p) => p.unit));
+  let name = base, i = 2;
+  while (used.has(name)) name = `${base} ${i++}`;
+  return name;
 }
 
 // ---------------------------------------------------------------- render: Kapning
@@ -750,7 +893,7 @@ function renderCuts() {
       ${list.map((r, i) => `<tr class="click" data-cut="${esc(name)}|${i}">
         <td class="r"><strong>${r.qty}</strong></td>
         <td class="r num">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td>
-        <td>${r.rip ? `<span class="tag rip">klyv ${r.section.join("×")}</span>` : ""}${r.endCuts.some((a) => a) ? `<span class="tag ang">${r.endCuts.filter((a) => a).map((a) => `${a}°`).join(" / ")}</span>` : ""}${!r.rip && !r.endCuts.some((a) => a) ? `<span class="tag">rakt</span>` : ""}</td>
+        <td>${r.rip ? `<span class="tag rip">klyv ${r.section.join("×")}</span>` : ""}${r.endCuts.some((a) => a) ? `<span class="tag ang">${r.endCuts.filter((a) => a).map((a) => `${a}°`).join(" / ")}</span>` : ""}${r.edge ? `<span class="tag fin">${esc(r.edge)} mm</span>` : ""}${!r.rip && !r.endCuts.some((a) => a) && !r.edge ? `<span class="tag">rakt</span>` : ""}</td>
         <td class="small">${esc(r.names.slice(0, 3).join(", "))}${r.names.length > 3 ? ` +${r.names.length - 3}` : ""}</td></tr>`).join("")}
     </table>`).join("") + `<p class="small muted">Klicka på en rad för att se delarna i 3D. Mått i mm.</p>`;
   (el as HTMLElement & { _rows?: typeof byMat })._rows = byMat;
@@ -762,8 +905,8 @@ body("cuts").addEventListener("click", (e) => {
   const rows = (body("cuts") as HTMLElement & { _rows?: Map<string, ReturnType<typeof cutList>> })._rows;
   const row = rows?.get(name)?.[+i];
   if (row) {
-    selected = null;
-    viewer.select(null, false);
+    selection = [];
+    viewer.select([], false);
     viewer.setHighlight(row.partIds);
   }
 });
@@ -780,7 +923,8 @@ function renderBuy() {
       <tr><th>Material</th><th class="r">Antal</th><th class="r">Kostnad</th></tr>
       ${buy.map((p) => `<tr><td>${esc(p.material.name)}${p.material.available ? ` <span class="tag">har</span>` : ""}<div class="small muted">${esc(p.unitLabel)}</div></td><td class="r"><strong>${p.qty}</strong></td><td class="r">${p.cost != null ? kr(p.cost) : "–"}</td></tr>`).join("")}
       ${state.design.hardware.map((h) => `<tr><td>${esc(h.name)}</td><td class="r">${fmt(h.qty)} ${esc(h.unit)}</td><td></td></tr>`).join("")}
-      <tr><td><strong>Summa material</strong> <span class="small muted">(ungefärliga priser)</span></td><td></td><td class="r"><strong>${kr(total)}</strong></td></tr>
+      ${finSummary?.items.length ? `<tr><td colspan="3" class="small muted" style="padding-top:12px"><strong>Ytbehandling</strong></td></tr>${finSummary.items.map((it) => `<tr><td>${esc(it.name)}</td><td class="r">${it.qty} ${esc(it.unit)}</td><td class="r">${it.cost ? kr(it.cost) : ""}</td></tr>`).join("")}` : ""}
+      <tr><td><strong>Summa</strong> <span class="small muted">(ungefärliga priser)</span></td><td></td><td class="r"><strong>${kr(total + (finSummary?.items.reduce((a, b) => a + b.cost, 0) ?? 0))}</strong></td></tr>
     </table>
     <div class="actions"><button class="btn small" id="copy-buy">Kopiera inköpslista</button></div>
     ${buy.map((p) => {
@@ -804,6 +948,7 @@ body("buy").addEventListener("click", (e) => {
     `Inköpslista – ${state.design.title}`,
     ...buy.map((p) => `${p.qty} × ${p.material.name} (${p.unitLabel})`),
     ...state.design.hardware.map((h) => `${h.qty} ${h.unit} ${h.name}`),
+    ...(finSummary?.items ?? []).map((it) => `${it.qty} ${it.unit} ${it.name}`),
   ];
   navigator.clipboard?.writeText(lines.join("\n")).then(() => toast("Inköpslistan är kopierad."), () => toast("Kunde inte kopiera."));
 });
@@ -814,12 +959,16 @@ function renderSteps() {
   const el = body("steps");
   const steps = state.design.steps;
   el.innerHTML = steps.length
-    ? `<p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
-      <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
-      <button class="btn small" data-step="-1">Visa allt</button>`
+    ? `${(state.design.guides ?? []).length ? `<div class="guide-links"><span class="small muted">Fogguide:</span> ${(state.design.guides ?? []).map((id) => guideById(id)).filter(Boolean).map((g) => `<button class="chip" data-open-guide="${g!.id}">${esc(g!.name)}</button>`).join("")}</div>` : ""}
+      <p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
+      <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}${(finSummary?.steps ?? []).map((s) => `<li class="fin-step"><div class="t">${esc(s.title)} <span class="tag fin">ytbehandling</span></div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
+      <button class="btn small" data-step="-1">Visa allt</button>
+      ${(state.design.diagrams ?? []).map((dg) => `<h3>${esc(dg.title)}</h3><div class="diagram-card">${dg.svg}${dg.caption ? `<p class="small muted">${esc(dg.caption)}</p>` : ""}</div>`).join("")}`
     : `<p class="muted">Inga byggsteg.</p>`;
 }
 body("steps").addEventListener("click", (e) => {
+  const og = (e.target as HTMLElement).closest<HTMLElement>("[data-open-guide]");
+  if (og) return openGuide(og.dataset.openGuide!);
   const s = (e.target as HTMLElement).closest<HTMLElement>("[data-step]");
   if (!s) return;
   stepIdx = +s.dataset.step!;
@@ -846,6 +995,335 @@ $("#stepbar").addEventListener("click", (e) => {
   renderSteps();
 });
 
+// ---------------------------------------------------------------- render: Hållfasthet
+
+let strength: StrengthReport | null = null;
+let heatOn = false;
+/** Förslag per grupp (nyckel = första delens id), räknas om efter varje ändring */
+let sugCache = new Map<string, Suggestion[]>();
+const sugOpen = new Set<string>();
+const pct = (u: number) => `${Math.round(u * 100)} %`;
+
+/** Slå ihop likadana resultat (t.ex. 24 identiska hyllplan) till en rad. */
+function groupMembers(list: MemberResult[]) {
+  const groups = new Map<string, MemberResult[]>();
+  for (const m of list) {
+    const base = m.name.replace(/[\s–-]*(\d+[a-z]?(\.\d+)?|[VH])(\s|$)/g, " ").replace(/\s+/g, " ").trim();
+    const key = [base, m.kind, m.materialName, m.span, m.deflection, Math.round(m.util * 100)].join("|");
+    groups.set(key, [...(groups.get(key) ?? []), m]);
+  }
+  return [...groups.values()];
+}
+
+function renderStrength() {
+  const el = body("strength");
+  const d = state.design;
+  const r = strength;
+  if (!r || !d.parts.length) return void (el.innerHTML = `<p class="muted">Inga delar ännu.</p>`);
+  const suggested = defaultLoad(d.templateId);
+  const over = r.members.filter((m) => m.util > 1);
+  const near = r.members.filter((m) => m.util > 0.8 && m.util <= 1);
+  const worst = r.worst;
+  const status = over.length
+    ? `<div class="status error"><strong>För svagt på ${over.length} ställe${over.length > 1 ? "n" : ""}</strong>Högsta utnyttjande ${pct(worst!.util)} (${esc(worst!.name)}). Se förslagen nedan.</div>`
+    : near.length
+      ? `<div class="status warn"><strong>Håller – men nära gränsen</strong>Högsta utnyttjande ${pct(worst!.util)} (${esc(worst!.name)}).</div>`
+      : `<div class="status ok"><strong>Håller</strong>${worst ? `Högsta utnyttjande ${pct(worst.util)} (${esc(worst.name)}).` : "Inga bärande delar att räkna på."}</div>`;
+  const groups = groupMembers(r.members).slice(0, 40);
+  const color = (u: number) => (u >= 1 ? "#d8342c" : u >= 0.8 ? "#f0a020" : u >= 0.5 ? "#9cc43a" : "#2e9e5b");
+  const rows = groups.map((g, gi) => {
+    const m = g[0];
+    const what = m.kind === "stolpe" ? "tryck" : m.uConn >= Math.max(m.uBend, m.uDefl) && m.uConn > 0 ? "infästning" : m.uDefl >= m.uBend ? "svikt" : "böjning";
+    const sub = [
+      m.kind === "stolpe" ? `stolpe ${fmt(m.span)} mm` : `spann ${fmt(m.span)} mm${m.cantilever ? ` (utkragning ${fmt(m.cantilever)})` : ""}`,
+      m.kind !== "stolpe" ? `svikt ${m.deflection} mm (max ${m.limit})` : "",
+      m.maxKg != null ? `tål ca ${fmt(m.maxKg)} kg (${fmt(m.maxKgM2!)} kg/m²)` : "",
+    ].filter(Boolean).join(" · ");
+    const key = m.id;
+    const showSug = m.util > 1 || sugOpen.has(key);
+    let sugHtml = "";
+    if (showSug) {
+      let list = sugCache.get(key);
+      if (!list) {
+        list = suggestFor(d, state.ws, r, g).slice(0, 4);
+        sugCache.set(key, list);
+      }
+      sugHtml = list.length
+        ? `<div class="sugs">${list.map((sg, si) => `
+            <div class="sug ${sg.after <= 1 ? "ok" : ""}" data-sug="${esc(key)}|${si}">
+              <div class="grow"><strong>${esc(sg.title)}</strong><div class="small muted">${esc(sg.detail)}</div>
+                <div class="small num">${pct(sg.before)} → <b style="color:${color(sg.after)}">${pct(sg.after)}</b>${sg.worstAfter > sg.after + 0.01 ? ` · högsta i hela: ${pct(sg.worstAfter)}` : ""} · ${sg.costDelta >= 0 ? "+" : "−"}${kr(Math.abs(sg.costDelta))}${sg.partsDelta ? ` · ${sg.partsDelta > 0 ? "+" : ""}${sg.partsDelta} delar` : ""}</div></div>
+              <button class="btn small ${si === 0 ? "primary" : ""}" data-accept="${esc(key)}|${si}">Acceptera</button>
+            </div>`).join("")}</div>`
+        : `<div class="small muted" style="margin-top:6px">Inga automatiska förslag – ${esc(m.advice ?? "ändra konstruktionen för hand.")}</div>`;
+    }
+    return `<tr class="click" data-sg="${gi}">
+      <td>${esc(m.name)}${g.length > 1 ? ` <span class="tag">×${g.length}</span>` : ""}<div class="small muted">${esc(m.materialName)} · ${sub}</div>${m.advice && !showSug ? `<div class="advice">${esc(m.advice)}</div>` : ""}
+        ${m.util > 0.8 && m.util <= 1 && !sugOpen.has(key) ? `<button class="btn ghost small" data-sugopen="${esc(key)}" style="padding-left:0">Visa förslag på förstärkning</button>` : ""}</td>
+      <td style="width:110px"><div class="small r num" style="text-align:right">${pct(m.util)} <span class="muted">${what}</span></div><div class="ubar ${m.util > 1 ? "over" : ""}"><span style="width:${Math.min(100, m.util * 100)}%;background:${color(m.util)}"></span></div></td>
+    </tr>${sugHtml ? `<tr class="sugrow"><td colspan="2">${sugHtml}</td></tr>` : ""}`;
+  }).join("");
+  el.innerHTML = `
+    <h3 style="margin-top:0">Last på ytor</h3>
+    <div class="load-row"><input type="number" id="load" value="${r.loadKgM2}" min="0" max="2000" step="10"/> <span>kg/m²</span>
+      ${d.loadKgM2 != null && d.loadKgM2 !== suggested ? `<button class="btn ghost small" data-load="${suggested}">Återställ (${suggested})</button>` : `<span class="small muted">förslag för projektet</span>`}</div>
+    <div class="actions" style="margin-top:8px">${LOAD_PRESETS.map((p) => `<button class="chip ${p.kg === r.loadKgM2 ? "on" : ""}" data-load="${p.kg}">${p.label} ${p.kg}</button>`).join("")}</div>
+    <p class="small muted">Lasten läggs på allt man ställer saker på – hyllplan, sitsar, lock, trall – och förs ned genom konstruktionen.</p>
+    ${status}
+    ${over.length ? `<div class="actions" style="margin:-2px 0 8px"><button class="btn primary" id="auto-reinforce">Förstärk automatiskt</button><span class="small muted" style="align-self:center">väljer det billigaste förslaget som räcker för varje svag del</span></div>` : ""}
+    <div class="warn-item ${r.tipping.level === "warn" ? "warn" : "info"}"><span>${r.tipping.level === "warn" ? "⚠️" : "↕"}</span><span>${esc(r.tipping.text)}</span></div>
+    ${r.unsupported.length ? `<div class="warn-item warn"><span>⚠️</span><span>Delar utan stöd: ${esc(r.unsupported.slice(0, 5).join(", "))}${r.unsupported.length > 5 ? " …" : ""}</span></div>` : ""}
+    <label class="switch" style="margin-top:10px"><input type="checkbox" id="heat" ${heatOn ? "checked" : ""}/> Visa utnyttjandegrad i 3D</label>
+    <div class="legend"><span><i style="background:#2e9e5b"></i>&lt; 50 %</span><span><i style="background:#9cc43a"></i>50–80 %</span><span><i style="background:#f0a020"></i>80–100 %</span><span><i style="background:#d8342c"></i>&gt; 100 %</span></div>
+    <h3>Delar (${r.members.length})</h3>
+    ${rows ? `<table class="tbl">${rows}</table>` : `<p class="muted">Inga liggande delar att räkna på.</p>`}
+    <p class="small muted">Förenklad kontroll med ungefärliga värden för C24/C18-virke, spånskiva, plywood och OSB: böjning, svikt (L/${d.templateId === "deck" || d.templateId === "woodShed" ? 300 : 200} efter krypning) och skruvinfästningar (2 skruvar per anslutning). Den ersätter inte en konstruktionsberäkning för bärande konstruktioner som altaner högt över mark.</p>`;
+  (el as HTMLElement & { _groups?: MemberResult[][] })._groups = groups;
+}
+
+const strengthEl = body("strength");
+strengthEl.addEventListener("click", (e) => {
+  const tgt = e.target as HTMLElement;
+  const lb = tgt.closest<HTMLElement>("[data-load]");
+  if (lb) return setLoad(Number(lb.dataset.load));
+  const acc = tgt.closest<HTMLElement>("[data-accept]");
+  if (acc) {
+    const [key, si] = acc.dataset.accept!.split("|");
+    const sg = sugCache.get(key)?.[+si];
+    if (sg) acceptSuggestion(sg);
+    return;
+  }
+  const so = tgt.closest<HTMLElement>("[data-sugopen]");
+  if (so) {
+    sugOpen.add(so.dataset.sugopen!);
+    return renderStrength();
+  }
+  if (tgt.closest("#auto-reinforce")) {
+    const res = autoReinforce(state.design, state.ws, groupMembers);
+    if (!res.applied.length) return toast("Hittade inga förslag som hjälper – ändra konstruktionen för hand.");
+    commit(() => (state.design = res.design), { keepBuild: true });
+    const left = strength?.members.filter((m) => m.util > 1).length ?? 0;
+    toast(`Förstärkt: ${res.applied.join(", ")}.${left ? ` ${left} del(ar) är fortfarande för svaga.` : " Allt håller nu."}`, 7000);
+    return;
+  }
+  if (tgt.closest(".sugrow")) return;
+  const row = tgt.closest<HTMLElement>("[data-sg]");
+  if (row) {
+    const g = (strengthEl as HTMLElement & { _groups?: MemberResult[][] })._groups?.[+row.dataset.sg!];
+    if (g) {
+      selection = [];
+      viewer.select([], false);
+      viewer.setHighlight(g.map((m) => m.id));
+    }
+  }
+});
+strengthEl.addEventListener("change", (e) => {
+  const tgt = e.target as HTMLInputElement;
+  if (tgt.id === "load") setLoad(Number(tgt.value));
+  if (tgt.id === "heat") {
+    heatOn = tgt.checked;
+    viewer.setHeatmap(heatOn && strength ? new Map(strength.members.map((m) => [m.id, m.util])) : null);
+    applySteps();
+  }
+});
+
+function acceptSuggestion(sg: Suggestion) {
+  commit(() => (state.design = sg.design), { keepBuild: !sg.key.startsWith("maxspan") });
+  viewer.setHighlight(sg.changedIds.slice(0, 200));
+  toast(`${sg.title}: ${pct(sg.before)} → ${pct(sg.after)}. Kapnings- och inköpslistan är uppdaterade – ångra med Ctrl+Z.`, 6000);
+}
+
+// Hovra över ett förslag för att se vilka delar det gäller
+strengthEl.addEventListener("mouseover", (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-sug]");
+  if (!el) return;
+  const [key, si] = el.dataset.sug!.split("|");
+  const sg = sugCache.get(key)?.[+si];
+  if (sg) viewer.setHighlight(sg.memberIds);
+});
+
+function setLoad(kg: number) {
+  if (!Number.isFinite(kg) || kg < 0) return;
+  commit(() => (state.design.loadKgM2 = kg), { keepBuild: true });
+}
+
+// ---------------------------------------------------------------- render: Ytbehandling
+
+/** Vad inställningarna gäller: "*" = allt, "g:<grupp>" = en grupp, "sel" = markerade delar */
+let finScope = "*";
+let finSummary: FinishSummary | null = null;
+const NO_FINISH: Required<Finish> = { edge: "rak", edgeSize: 0, sand: 0, coating: "ingen", color: "#f4f2ec", edgeBand: false };
+
+function scopeFinish(): Required<Finish> {
+  const d = state.design;
+  if (finScope === "sel") {
+    const p = d.parts.find((x) => x.id === selection[0]);
+    return p ? effectiveFinish(d, p) : NO_FINISH;
+  }
+  if (finScope === "*") return { ...NO_FINISH, ...(d.finishes?.["*"] ?? {}) };
+  return { ...NO_FINISH, ...(d.finishes?.["*"] ?? {}), ...(d.finishes?.[finScope] ?? {}) };
+}
+
+function setFinish(patch: Finish | null) {
+  commit(() => {
+    const d = state.design;
+    if (finScope === "sel") {
+      for (const p of d.parts) if (selection.includes(p.id)) p.finish = patch ? { ...(p.finish ?? {}), ...patch } : undefined;
+    } else {
+      d.finishes = { ...(d.finishes ?? {}) };
+      if (patch) d.finishes[finScope] = { ...(d.finishes[finScope] ?? {}), ...patch };
+      else delete d.finishes[finScope];
+    }
+  }, { keepBuild: true });
+}
+
+function renderFinish() {
+  const el = body("finish");
+  const d = state.design;
+  if (!d.parts.length) return void (el.innerHTML = `<p class="muted">Inga delar ännu.</p>`);
+  if (finScope === "sel" && !selection.length) finScope = "*";
+  if (finScope.startsWith("g:") && !d.parts.some((p) => `g:${p.group}` === finScope)) finScope = "*";
+  const f = scopeFinish();
+  const groups = [...new Set(d.parts.filter((p) => matOf(p.materialId)?.kind !== "mesh").map((p) => p.group))];
+  const chip = (on: boolean, attr: string, label: string, title = "") => `<button class="chip ${on ? "on" : ""}" ${attr} ${title ? `title="${esc(title)}"` : ""}>${label}</button>`;
+  const info = coatingInfo(f.coating);
+  const sum = finSummary!;
+  const total = sum.items.reduce((a, b) => a + b.cost, 0);
+  const own = d.parts.filter((p) => p.finish).length;
+  el.innerHTML = `
+    <h3 style="margin-top:0">Gäller</h3>
+    <div class="actions" style="margin-top:0">
+      ${chip(finScope === "*", 'data-scope="*"', "Hela konstruktionen")}
+      ${chip(finScope === "sel", `data-scope="sel" ${selection.length ? "" : "disabled"}`, `Markerade delar${selection.length ? ` (${selection.length})` : ""}`, "Markera delar i 3D-vyn (dubbelklick = hel enhet)")}
+      <select id="fin-group" style="width:auto;flex:1;min-width:140px"><option value="">Grupp …</option>${groups.map((g) => `<option value="g:${esc(g)}" ${finScope === `g:${g}` ? "selected" : ""}>${esc(g)}</option>`).join("")}</select>
+    </div>
+    <h3>Snabbval</h3>
+    <div class="actions" style="margin-top:0">${PRESETS.map((p, i) => chip(false, `data-preset-fin="${i}"`, esc(p.name))).join("")}</div>
+
+    <h3>Kanter</h3>
+    <div class="actions" style="margin-top:0">${EDGES.map((e) => chip(f.edge === e.id, `data-edge="${e.id}"`, e.name, e.desc)).join("")}</div>
+    ${f.edge !== "rak" ? `<div class="actions">${[2, 3, 4, 6, 10].map((n) => chip(f.edgeSize === n, `data-esize="${n}"`, `${n} mm`)).join("")}</div>
+      <p class="small muted">${esc(EDGES.find((e) => e.id === f.edge)!.desc)}</p>` : ""}
+
+    <h3>Slipning</h3>
+    <div class="actions" style="margin-top:0">${SANDING.map((g) => chip(f.sand === g, `data-sand="${g}"`, g ? `Korn ${g}` : "Ingen")).join("")}</div>
+
+    <h3>Behandling</h3>
+    <div class="actions" style="margin-top:0">${COATINGS.map((c) => chip(f.coating === c.id, `data-coat="${c.id}"`, c.name, c.desc)).join("")}</div>
+    <p class="small muted">${esc(info.desc)}${info.coats ? ` ${info.coats} lager.` : ""}</p>
+    ${info.hasColor ? `<div class="swatches">${COLORS.map((c) => `<button class="swatch-btn ${f.color === c.hex ? "on" : ""}" data-color="${c.hex}" title="${c.name}" style="background:${c.hex}"></button>`).join("")}<input type="color" id="fin-color" value="${f.color}" title="Egen kulör"/></div>` : ""}
+    <label class="switch" style="margin-top:10px"><input type="checkbox" id="fin-band" ${f.edgeBand ? "checked" : ""}/> Kantband på skivornas kanter</label>
+    <div class="actions"><button class="btn ghost small" id="fin-reset">Ta bort behandling för ${finScope === "*" ? "hela konstruktionen" : finScope === "sel" ? "markerade delar" : `gruppen ${esc(finScope.slice(2))}`}</button></div>
+
+    <h3>Åtgång & kostnad</h3>
+    ${sum.items.length ? `<table class="tbl">${sum.items.map((it) => `<tr><td>${esc(it.name)}</td><td class="r">${it.qty} ${esc(it.unit)}</td><td class="r">${it.cost ? kr(it.cost) : ""}</td></tr>`).join("")}
+      <tr><td><strong>Summa</strong></td><td></td><td class="r"><strong>${kr(total)}</strong></td></tr></table>
+      <p class="small muted">Behandlad yta ca ${sum.area} m² · arbetstid ca ${sum.hours} h${sum.dryHours ? ` + torktid ca ${sum.dryHours} h` : ""}.</p>` : `<p class="small muted">Ingen ytbehandling vald.</p>`}
+    ${sum.warnings.map((w, i) => `<div class="warn-item ${w.level}" data-finwarn="${i}"><span>${w.level === "warn" ? "⚠️" : "ℹ️"}</span><span>${esc(w.text)}</span><span class="cnt">${w.partIds.length} del${w.partIds.length > 1 ? "ar" : ""}</span></div>`).join("")}
+
+    <h3>I konstruktionen</h3>
+    <ul class="notes small">
+      <li>Hela: ${esc(describeFinish({ ...NO_FINISH, ...(d.finishes?.["*"] ?? {}) }))}</li>
+      ${Object.entries(d.finishes ?? {}).filter(([k]) => k.startsWith("g:")).map(([k, v]) => `<li>Gruppen ${esc(k.slice(2))}: ${esc(describeFinish({ ...NO_FINISH, ...(d.finishes?.["*"] ?? {}), ...v }))}</li>`).join("")}
+      ${own ? `<li>${own} del${own > 1 ? "ar" : ""} med egen behandling</li>` : ""}
+    </ul>
+    <label class="switch"><input type="checkbox" id="fin-show" ${viewer.showFinish ? "checked" : ""}/> Visa ytbehandling i 3D</label>`;
+}
+
+const finEl = body("finish");
+finEl.addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("button, [data-finwarn]");
+  if (!b) return;
+  const ds = b.dataset;
+  if (ds.scope) {
+    finScope = ds.scope;
+    return renderFinish();
+  }
+  if (ds.presetFin) return setFinish({ ...PRESETS[+ds.presetFin].finish });
+  if (ds.edge) return setFinish({ edge: ds.edge as Finish["edge"], edgeSize: ds.edge === "rak" ? 0 : scopeFinish().edgeSize || 3 });
+  if (ds.esize) return setFinish({ edgeSize: +ds.esize });
+  if (ds.sand) return setFinish({ sand: +ds.sand });
+  if (ds.coat) return setFinish({ coating: ds.coat as Finish["coating"] });
+  if (ds.color) return setFinish({ color: ds.color });
+  if (b.id === "fin-reset") return setFinish(null);
+  if (ds.finwarn) {
+    const ids = finSummary?.warnings[+ds.finwarn]?.partIds ?? [];
+    viewer.setHighlight(ids);
+  }
+});
+finEl.addEventListener("change", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.id === "fin-group" && t.value) {
+    finScope = t.value;
+    renderFinish();
+  } else if (t.id === "fin-color") setFinish({ color: t.value });
+  else if (t.id === "fin-band") setFinish({ edgeBand: t.checked });
+  else if (t.id === "fin-show") {
+    viewer.setShowFinish(t.checked);
+    applySteps();
+  }
+});
+
+// ---------------------------------------------------------------- render: Fogar
+
+let guideOpen: string | null = null;
+let guideOnlyBasic = true;
+
+function renderJoinery() {
+  const el = body("joinery");
+  const dots = (n: number) => `<span class="dots">${[1, 2, 3].map((i) => `<i class="${i <= n ? "on" : ""}"></i>`).join("")}</span>`;
+  const toolName = (id: string) => state.ws.tools.find((t) => t.id === id)?.name ?? id;
+  const have = (id: string) => state.ws.tools.some((t) => t.id === id && t.available);
+  const related = new Set(state.design.guides ?? []);
+  const list = GUIDES.filter((g) => !guideOnlyBasic || g.tools.every((t) => ["ryggsag", "tving"].includes(t)));
+  el.innerHTML = `
+    <p class="small muted" style="margin-top:0">Fogar du kan göra med en <strong>japansåg</strong> och en <strong>tving</strong> – plus lim, blyerts, vinkelhake och sandpapper. Börja med <em>Grunderna</em>, och gör alltid en provfog i spillbitar.</p>
+    ${!have("ryggsag") || !have("tving") ? `<div class="warn-item info"><span>ℹ️</span><span>Bocka i ${!have("ryggsag") ? "<strong>Japansåg / ryggsåg</strong>" : ""}${!have("ryggsag") && !have("tving") ? " och " : ""}${!have("tving") ? "<strong>Tvingar</strong>" : ""} under Verktyg om du har dem.</span></div>` : ""}
+    <div class="list">${list.map((g) => {
+      const open = guideOpen === g.id;
+      return `<div class="guide ${open ? "open" : ""}">
+        <button class="guide-head" data-guide="${g.id}">
+          <div class="grow"><div class="name">${esc(g.name)} ${related.has(g.id) ? `<span class="tag fin">i ditt projekt</span>` : ""}</div><div class="meta">${esc(g.use)}</div>
+          ${g.strength ? `<div class="meta">Svårighet ${dots(g.difficulty)} · Hållfasthet ${dots(g.strength)} · ${esc(g.time)}</div>` : `<div class="meta">${esc(g.time)}</div>`}</div>
+          <span class="chev">${open ? "▾" : "▸"}</span>
+        </button>
+        ${open ? `<div class="guide-body">
+          <p>${esc(g.intro)}</p>
+          <div class="diagram-card">${g.svg}</div>
+          <h3>Du behöver</h3>
+          <ul class="notes small">${g.tools.map((t) => `<li>${esc(toolName(t))}${have(t) ? " ✓" : ""}</li>`).join("")}${g.need.map((n) => `<li>${esc(n)}</li>`).join("")}${g.optional.length ? `<li class="muted">Bra att ha: ${g.optional.map((t) => esc(toolName(t))).join(", ")}</li>` : ""}</ul>
+          <h3>Gör så här</h3>
+          <ol class="steps-list">${g.steps.map((st) => `<li class="fin-step"><div class="t">${esc(st.title)}</div><div class="small">${esc(st.text)}</div>${st.clamp ? `<div class="clamp-tip small"><b>Tvingen:</b> ${esc(st.clamp)}</div>` : ""}</li>`).join("")}</ol>
+          <h3>Vanliga misstag</h3>
+          <table class="tbl">${g.mistakes.map((m) => `<tr><td><strong>${esc(m.problem)}</strong><div class="small muted">${esc(m.fix)}</div></td></tr>`).join("")}</table>
+        </div>` : ""}
+      </div>`;
+    }).join("")}</div>
+    <label class="switch" style="margin-top:12px"><input type="checkbox" id="guide-basic" ${guideOnlyBasic ? "checked" : ""}/> Visa bara fogar för japansåg + tving</label>`;
+}
+
+const joinEl = body("joinery");
+joinEl.addEventListener("click", (e) => {
+  const h = (e.target as HTMLElement).closest<HTMLElement>("[data-guide]");
+  if (!h) return;
+  guideOpen = guideOpen === h.dataset.guide ? null : h.dataset.guide!;
+  renderJoinery();
+});
+joinEl.addEventListener("change", (e) => {
+  if ((e.target as HTMLElement).id === "guide-basic") {
+    guideOnlyBasic = (e.target as HTMLInputElement).checked;
+    renderJoinery();
+  }
+});
+
+/** Öppna en fogguide från ett projekt */
+function openGuide(id: string) {
+  guideOpen = id;
+  switchTab("left", "joinery");
+  renderJoinery();
+  body("joinery").querySelector(".guide.open")?.scrollIntoView({ block: "start" });
+}
+
 // ---------------------------------------------------------------- render: allt
 
 function setBadge() {
@@ -853,15 +1331,21 @@ function setBadge() {
   const errs = warnings.filter((w) => w.level === "error").length;
   const warns = warnings.filter((w) => w.level === "warn").length;
   btn.innerHTML = `Översikt${errs ? `<span class="badge">${errs}</span>` : warns ? `<span class="badge warn">${warns}</span>` : ""}`;
+  const over = strength?.members.filter((m) => m.util > 1).length ?? 0;
+  $(`[data-tabs="right"] [data-tab="strength"]`).innerHTML = `Hållfasthet${over ? `<span class="badge">${over}</span>` : ""}`;
 }
 
 function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   const d = state.design;
-  warnings = checkDesign(d, state.ws);
+  finSummary = finishSummary(d, state.ws);
+  warnings = [...checkDesign(d, state.ws), ...finSummary.warnings];
+  strength = analyzeStrength(d, state.ws);
+  sugCache = new Map();
+  viewer.setHeatmap(heatOn ? new Map(strength.members.map((m) => [m.id, m.util])) : null, false);
   const title = $("#title") as HTMLInputElement;
   if (document.activeElement !== title) title.value = d.title;
   viewer.setDesign(d, state.ws.materials, opts.fit);
-  viewer.select(selected, moveMode);
+  viewer.select(selection, moveMode);
   applySteps();
   if (!opts.keepBuild) renderBuild();
   renderMaterials();
@@ -871,6 +1355,9 @@ function renderAll(opts: { fit?: boolean; keepBuild?: boolean } = {}) {
   renderCuts();
   renderBuy();
   renderSteps();
+  renderStrength();
+  renderFinish();
+  renderJoinery();
   setBadge();
   $("#empty").hidden = d.parts.length > 0;
   ($("#undo") as HTMLButtonElement).disabled = !undoStack.length;
@@ -894,7 +1381,7 @@ function applyTheme() {
   const dark = state.theme === "dark" || (state.theme === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
   viewer.setTheme(dark);
   viewer.setDesign(state.design, state.ws.materials);
-  viewer.select(selected, moveMode);
+  viewer.select(selection, moveMode);
   applySteps();
 }
 $("#theme").addEventListener("click", () => {
@@ -997,9 +1484,11 @@ function printView() {
   div.className = "print-only";
   div.innerHTML = `<h1>${esc(d.title)}</h1><img src="${img}" alt="3D-vy"/>
     <h2>Kapningslista</h2><table class="tbl"><tr><th>Material</th><th class="r">St</th><th class="r">Mått (mm)</th><th>Bearbetning</th><th>Delar</th></tr>
-    ${rows.map((r) => `<tr><td>${esc(r.materialName)}</td><td class="r">${r.qty}</td><td class="r">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td><td>${r.rip ? `klyv ${r.section.join("×")} ` : ""}${r.endCuts.some((a) => a) ? r.endCuts.join("/") + "°" : ""}</td><td>${esc(r.names.join(", "))}</td></tr>`).join("")}</table>
+    ${rows.map((r) => `<tr><td>${esc(r.materialName)}</td><td class="r">${r.qty}</td><td class="r">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td><td>${r.rip ? `klyv ${r.section.join("×")} ` : ""}${r.endCuts.some((a) => a) ? r.endCuts.join("/") + "° " : ""}${r.edge ? `kant ${esc(r.edge)} mm` : ""}</td><td>${esc(r.names.join(", "))}</td></tr>`).join("")}</table>
     <h2>Inköp</h2><ul>${buy.map((p) => `<li>${p.qty} × ${esc(p.material.name)} (${esc(p.unitLabel)})</li>`).join("")}${d.hardware.map((h) => `<li>${h.qty} ${esc(h.unit)} ${esc(h.name)}</li>`).join("")}</ul>
-    <h2>Byggsteg</h2><ol>${d.steps.map((s) => `<li><strong>${esc(s.title)}</strong> – ${esc(s.text)}</li>`).join("")}</ol>
+    ${finSummary?.items.length ? `<h2>Ytbehandling</h2><ul>${finSummary.items.map((it) => `<li>${it.qty} ${esc(it.unit)} ${esc(it.name)}</li>`).join("")}</ul>` : ""}
+    ${(d.diagrams ?? []).map((dg) => `<h2>${esc(dg.title)}</h2>${dg.svg}${dg.caption ? `<p>${esc(dg.caption)}</p>` : ""}`).join("")}
+    <h2>Byggsteg</h2><ol>${[...d.steps, ...(finSummary?.steps ?? [])].map((s) => `<li><strong>${esc(s.title)}</strong> – ${esc(s.text)}</li>`).join("")}</ol>
     ${d.notes.length ? `<h2>Att tänka på</h2><ul>${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
   document.body.appendChild(div);
   const done = () => div.remove();
@@ -1024,8 +1513,8 @@ $("#v-xray").addEventListener("click", (e) => {
 $("#v-move").addEventListener("click", (e) => {
   moveMode = !moveMode;
   (e.currentTarget as HTMLElement).classList.toggle("on", moveMode);
-  viewer.select(selected, moveMode);
-  if (moveMode && !selected) toast("Klicka på en del för att flytta den.");
+  viewer.select(selection, moveMode);
+  if (moveMode && !selection.length) toast("Klicka på en del för att flytta den – dubbelklicka för att ta hela facket/enheten.");
   renderParts();
 });
 $("#v-explode").addEventListener("input", (e) => viewer.setExplode(Number((e.target as HTMLInputElement).value)));
@@ -1046,8 +1535,8 @@ document.addEventListener("keydown", (e) => {
     return redo();
   }
   if (typing) return;
-  if (e.key === "Escape") return select(null, false);
-  if (!selected) return;
+  if (e.key === "Escape") return select(null, "replace", false);
+  if (!selection.length) return;
   if (e.key === "Delete" || e.key === "Backspace") {
     e.preventDefault();
     return deleteSelected();
@@ -1059,11 +1548,7 @@ document.addEventListener("keydown", (e) => {
   const mv = moves[e.key];
   if (mv) {
     e.preventDefault();
-    commit(() => {
-      const p = state.design.parts.find((x) => x.id === selected);
-      if (p) p.pos[mv[0]] += mv[1];
-      state.design.edited = true;
-    });
+    moveParts(selection, { x: 0, y: 0, z: 0, [mv[0]]: mv[1] });
   }
 });
 

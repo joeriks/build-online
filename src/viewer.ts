@@ -4,12 +4,66 @@ import { TransformControls } from "three/examples/jsm/controls/TransformControls
 import { CSS2DObject, CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { Design, Material, Part, Vec3 } from "./types";
 import { bounds } from "./analysis";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { effectiveFinish, type Finish } from "./finish";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import type { Part as PartT } from "./types";
+
+/**
+ * Geometri för delar med hörnfog. Byggs i ett "kanoniskt" system (längd längs X, höjd längs Y,
+ * tjocklek längs Z, i mm) och vrids sedan till delens riktning.
+ */
+function jointGeometry(p: PartT): THREE.BufferGeometry | null {
+  const j = p.joint;
+  if (!j) return null;
+  const alongX = p.dims.x >= p.dims.z;
+  const L = alongX ? p.dims.x : p.dims.z;
+  const T = alongX ? p.dims.z : p.dims.x;
+  const H = p.dims.y;
+  if (L < 3 * T) return null;
+  let geo: THREE.BufferGeometry;
+  if (j.type === "finger") {
+    const n = Math.max(1, j.count);
+    const parts: THREE.BufferGeometry[] = [new THREE.BoxGeometry(L - 2 * T, H, T)];
+    for (const e of [-1, 1])
+      for (let i = 0; i < n; i++) {
+        if ((i + j.start) % 2) continue;
+        const g = new THREE.BoxGeometry(T, H / n, T);
+        g.translate(e * (L / 2 - T / 2), -H / 2 + (i + 0.5) * (H / n), 0);
+        parts.push(g);
+      }
+    geo = mergeGeometries(parts)!;
+    parts.forEach((g) => g.dispose());
+  } else {
+    // Trapets: yttersidan full längd, insidan kortare med 2×tjockleken
+    const inwardCanon = alongX ? j.inward : -j.inward; // vridning 90° runt Y byter tecken
+    const yIn = -inwardCanon * (T / 2); // ExtrudeGeometry: form-y blir -Z efter vridningen nedan
+    const yOut = -yIn;
+    const shape = new THREE.Shape();
+    shape.moveTo(-L / 2, yOut);
+    shape.lineTo(L / 2, yOut);
+    shape.lineTo(L / 2 - T, yIn);
+    shape.lineTo(-L / 2 + T, yIn);
+    shape.closePath();
+    geo = new THREE.ExtrudeGeometry(shape, { depth: H, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, -H / 2, 0);
+    // ExtrudeGeometry har uv i mm – skala så texturen hamnar rätt
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 600, uv.getY(i) / 600);
+  }
+  if (!alongX) geo.rotateY(-Math.PI / 2);
+  geo.scale(0.001, 0.001, 0.001);
+  return geo;
+}
 
 const S = 0.001; // mm → meter i scenen
 
 export interface ViewerOptions {
-  onSelect: (id: string | null) => void;
-  onMove: (id: string, pos: Vec3) => void;
+  /** mode: "replace" = vanligt klick, "toggle" = Shift/Ctrl-klick, "unit" = dubbelklick (hela enheten) */
+  onSelect: (id: string | null, mode: "replace" | "toggle" | "unit") => void;
+  /** Markerade delar har flyttats `delta` mm */
+  onMove: (ids: string[], delta: Vec3) => void;
   onHover: (part: Part | null, x: number, y: number) => void;
 }
 
@@ -65,7 +119,10 @@ export class Viewer {
   env = new THREE.Group();
   meshes = new Map<string, THREE.Mesh>();
   matCache = new Map<string, THREE.MeshStandardMaterial>();
-  selected: string | null = null;
+  selected = new Set<string>();
+  /** Osynligt handtag i mitten av markeringen som flyttpilarna sitter på */
+  private pivot = new THREE.Object3D();
+  private dragStart: { pivot: THREE.Vector3; meshes: Map<string, THREE.Vector3> } | null = null;
   explode = 0;
   showDims = true;
   xray = false;
@@ -98,18 +155,29 @@ export class Viewer {
     this.gizmo = new TransformControls(this.camera, this.renderer.domElement);
     this.gizmo.setTranslationSnap(5 * S);
     this.gizmo.setSize(0.8);
+    this.scene.add(this.pivot);
     this.gizmo.addEventListener("dragging-changed", (e) => {
       this.controls.enabled = !e.value;
-      if (!e.value && this.selected) {
-        const m = this.meshes.get(this.selected);
-        const part = this.design?.parts.find((p) => p.id === this.selected);
-        if (m && part) {
-          const off = this.explodeOffset(part);
-          this.opts.onMove(this.selected, {
-            x: Math.round(m.position.x / S - off.x), y: Math.round(m.position.y / S - off.y), z: Math.round(m.position.z / S - off.z),
-          });
-        }
+      if (e.value) {
+        this.dragStart = {
+          pivot: this.pivot.position.clone(),
+          meshes: new Map([...this.selected].flatMap((id) => {
+            const m = this.meshes.get(id);
+            return m ? [[id, m.position.clone()] as const] : [];
+          })),
+        };
+      } else if (this.dragStart) {
+        const d = this.pivot.position.clone().sub(this.dragStart.pivot);
+        this.dragStart = null;
+        const delta = { x: Math.round(d.x / S), y: Math.round(d.y / S), z: Math.round(d.z / S) };
+        if (delta.x || delta.y || delta.z) this.opts.onMove([...this.selected], delta);
       }
+    });
+    // Flytta alla markerade delar live medan handtaget dras
+    this.gizmo.addEventListener("objectChange", () => {
+      if (!this.dragStart) return;
+      const d = this.pivot.position.clone().sub(this.dragStart.pivot);
+      for (const [id, start] of this.dragStart.meshes) this.meshes.get(id)?.position.copy(start).add(d);
     });
     this.scene.add(this.gizmo.getHelper());
 
@@ -133,7 +201,11 @@ export class Viewer {
       if (Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) > 4) return;
       if ((this.gizmo as unknown as { dragging: boolean }).dragging) return;
       const hit = this.pick(e);
-      this.opts.onSelect(hit);
+      this.opts.onSelect(hit, e.shiftKey || e.ctrlKey || e.metaKey ? "toggle" : "replace");
+    });
+    dom.addEventListener("dblclick", (e) => {
+      const hit = this.pick(e as PointerEvent);
+      if (hit) this.opts.onSelect(hit, "unit");
     });
     dom.addEventListener("pointermove", (e) => {
       const id = this.pick(e);
@@ -179,6 +251,75 @@ export class Viewer {
     return ((solid ?? hits[0])?.object.userData.id as string) ?? null;
   }
 
+  /** Färgkarta för hållfasthet: utnyttjandegrad per del (saknas = ej beräknad) */
+  private heat: Map<string, number> | null = null;
+
+  /** Färg efter utnyttjandegrad: grön < 50 %, gulgrön < 80 %, orange < 100 %, röd ≥ 100 % */
+  static heatColor(u: number): string {
+    return u >= 1 ? "#d8342c" : u >= 0.8 ? "#f0a020" : u >= 0.5 ? "#9cc43a" : "#2e9e5b";
+  }
+
+  private heatMaterial(u: number | undefined, mat: Material | undefined): THREE.MeshStandardMaterial {
+    const key = u == null ? `heat-none-${mat?.kind}` : `heat-${Viewer.heatColor(u)}`;
+    let m = this.matCache.get(key);
+    if (m) return m;
+    m = u == null
+      ? new THREE.MeshStandardMaterial({ color: this.dark ? 0x5a6069 : 0xc4c8cf, roughness: 0.9, transparent: true, opacity: mat?.kind === "mesh" ? 0.08 : 0.55, depthWrite: false })
+      : new THREE.MeshStandardMaterial({ color: Viewer.heatColor(u), roughness: 0.7 });
+    this.matCache.set(key, m);
+    return m;
+  }
+
+  /** Sätt färgkartan. `rebuild = false` när setDesign ändå anropas direkt efteråt. */
+  setHeatmap(heat: Map<string, number> | null, rebuild = true) {
+    this.heat = heat;
+    // färgerna för "ej beräknad" beror på temat – rensa cachen
+    for (const k of [...this.matCache.keys()]) if (k.startsWith("heat-none")) this.matCache.delete(k);
+    if (!rebuild) return;
+    if (this.design) this.setDesign(this.design, this.materials);
+    this.select([...this.selected], !!this.gizmo.object);
+  }
+
+  /** Visa ytbehandling (kanter och färg/olja/lack) i 3D */
+  showFinish = true;
+
+  setShowFinish(v: boolean) {
+    this.showFinish = v;
+    if (this.design) this.setDesign(this.design, this.materials);
+    this.select([...this.selected], !!this.gizmo.object);
+  }
+
+  /** Material med ytbehandling: olja/vax/lasyr färgar trät, lack blänker, färg täcker. */
+  private finishedMaterial(mat: Material | undefined, f: Required<Finish>): THREE.MeshStandardMaterial {
+    if (!mat) return this.material(mat);
+    const key = `fin|${mat.id}|${mat.color}|${this.xray}|${f.coating}|${f.color}`;
+    let m = this.matCache.get(key);
+    if (m) return m;
+    const base = { transparent: this.xray, opacity: this.xray ? 0.35 : 1, depthWrite: !this.xray };
+    const tex = () => woodTexture(mat.color, mat.kind);
+    switch (f.coating) {
+      case "olja":
+        m = new THREE.MeshStandardMaterial({ ...base, map: tex(), color: "#e0b27e", roughness: 0.5 });
+        break;
+      case "vax":
+        m = new THREE.MeshStandardMaterial({ ...base, map: tex(), color: "#f4dcb4", roughness: 0.55 });
+        break;
+      case "lasyr":
+        m = new THREE.MeshStandardMaterial({ ...base, map: tex(), color: new THREE.Color(f.color).lerp(new THREE.Color("#ffffff"), 0.35), roughness: 0.7 });
+        break;
+      case "lack":
+        m = new THREE.MeshPhysicalMaterial({ ...base, map: tex(), color: "#f2d8b6", roughness: 0.35, clearcoat: 1, clearcoatRoughness: 0.12 });
+        break;
+      case "farg":
+        m = new THREE.MeshStandardMaterial({ ...base, color: f.color, roughness: 0.55 });
+        break;
+      default:
+        return this.material(mat);
+    }
+    this.matCache.set(key, m);
+    return m;
+  }
+
   private material(mat: Material | undefined): THREE.MeshStandardMaterial {
     const key = mat ? `${mat.id}|${mat.color}|${this.xray}` : "unknown";
     let m = this.matCache.get(key);
@@ -217,8 +358,12 @@ export class Viewer {
     const edgeMat = new THREE.LineBasicMaterial({ color: this.dark ? 0x000000 : 0x5a4225, transparent: true, opacity: 0.45 });
     for (const p of design.parts) {
       const mat = materials.find((m) => m.id === p.materialId);
-      const geo = new THREE.BoxGeometry(Math.max(p.dims.x, 0.5) * S, Math.max(p.dims.y, 0.5) * S, Math.max(p.dims.z, 0.5) * S);
-      const material = this.material(mat);
+      const fin = this.showFinish && mat?.kind !== "mesh" ? effectiveFinish(design, p) : null;
+      const w = Math.max(p.dims.x, 0.5) * S, h = Math.max(p.dims.y, 0.5) * S, dd = Math.max(p.dims.z, 0.5) * S;
+      // Fasade/rundade kanter: RoundedBoxGeometry med 1 segment ger fas, fler segment ger rundning
+      const r = fin && fin.edge !== "rak" && fin.edgeSize > 0 ? Math.min(fin.edgeSize, Math.min(p.dims.x, p.dims.y, p.dims.z) / 2 - 0.2) * S : 0;
+      const geo = jointGeometry(p) ?? (r > 0.0004 ? new RoundedBoxGeometry(w, h, dd, fin!.edge === "fas" ? 1 : fin!.edge === "profil" ? 2 : 4, r) : new THREE.BoxGeometry(w, h, dd));
+      const material = this.heat ? this.heatMaterial(this.heat.get(p.id), mat) : fin && fin.coating !== "ingen" ? this.finishedMaterial(mat, fin) : this.material(mat);
       if (mat && mat.kind !== "mesh" && material.map) {
         // skala texturen så ådringen följer delens längd ungefär
         const uv = geo.attributes.uv;
@@ -235,7 +380,7 @@ export class Viewer {
       mesh.castShadow = mat?.kind !== "mesh";
       mesh.receiveShadow = true;
       if (mat?.kind !== "mesh") {
-        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), edgeMat);
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), edgeMat);
         edges.raycast = () => {};
         mesh.add(edges);
       }
@@ -265,7 +410,7 @@ export class Viewer {
   private applyHighlight() {
     for (const [id, m] of this.meshes) {
       const part = this.design?.parts.find((p) => p.id === id);
-      const sel = id === this.selected;
+      const sel = this.selected.has(id);
       const active = (this.activeGroups && part && this.activeGroups.has(part.group)) || this.hlIds.has(id);
       const base = m.material as THREE.MeshStandardMaterial;
       if (sel || active) {
@@ -285,12 +430,15 @@ export class Viewer {
     }
   }
 
-  select(id: string | null, move: boolean) {
-    this.selected = id;
+  select(ids: string[], move: boolean) {
+    this.selected = new Set(ids.filter((id) => this.meshes.has(id)));
     this.applyHighlight();
-    const m = id ? this.meshes.get(id) : null;
-    if (m && move) this.gizmo.attach(m);
-    else this.gizmo.detach();
+    if (!move || !this.selected.size) return void this.gizmo.detach();
+    // Handtaget placeras i mitten av markeringens omslutande låda
+    const box = new THREE.Box3();
+    for (const id of this.selected) box.expandByObject(this.meshes.get(id)!);
+    box.getCenter(this.pivot.position);
+    this.gizmo.attach(this.pivot);
   }
 
   setHighlight(ids: string[]) {
@@ -313,7 +461,7 @@ export class Viewer {
   setXray(v: boolean) {
     this.xray = v;
     if (this.design) this.setDesign(this.design, this.materials);
-    this.select(this.selected, !!this.gizmo.object);
+    this.select([...this.selected], !!this.gizmo.object);
   }
 
   setShowDims(v: boolean) {

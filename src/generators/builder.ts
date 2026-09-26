@@ -11,7 +11,21 @@ export class Builder {
   hardware: Hardware[] = [];
   notes: string[] = [];
 
+  /** Enhet som nya delar tillhör (se `inUnit`) */
+  unit: string | null = null;
+
   constructor(public ws: Workshop) {}
+
+  /** Alla delar som skapas i `fn` tillhör enheten `name`. */
+  inUnit<T>(name: string, fn: () => T): T {
+    const prev = this.unit;
+    this.unit = name;
+    try {
+      return fn();
+    } finally {
+      this.unit = prev;
+    }
+  }
 
   has(tool: string) {
     return hasTool(this.ws, tool);
@@ -28,6 +42,7 @@ export class Builder {
       rot: { x: 0, y: 0, z: 0 },
       endCuts: [0, 0],
       group,
+      ...(this.unit ? { unit: this.unit } : {}),
       ...extra,
     };
     this.parts.push(p);
@@ -57,6 +72,7 @@ export class Builder {
       rot: plane === "xy" ? { x: 0, y: 0, z: 45 * dir } : { x: -45 * dir, y: 0, z: 0 },
       endCuts: [45, 45],
       group,
+      ...(this.unit ? { unit: this.unit } : {}),
     };
     this.parts.push(p);
     return p;
@@ -129,6 +145,8 @@ export interface SurfaceOpts {
   preferSheet?: boolean;
   minSheet?: number;
   label?: string;
+  /** Brädornas riktning: längs X (standard) eller Z – lägg dem alltid tvärs över stöden */
+  along?: "x" | "z";
 }
 
 /**
@@ -138,50 +156,53 @@ export interface SurfaceOpts {
  */
 export function fillSurface(b: Builder, name: string, group: string, x0: number, y0: number, z0: number, lx: number, lz: number, opts: SurfaceOpts = {}): { thickness: number; kind: string } {
   const gap = opts.gap ?? 6;
-  const sheet = opts.preferSheet !== false ? pickSheet(b.ws, opts.minSheet ?? 9) : null;
-  if (sheet) {
-    const along = lz <= sheet.stockWidth ? sheet.stockLength : lz <= sheet.stockLength ? sheet.stockWidth : 0;
-    if (along) {
-      // dela längs X om det behövs
-      const nx = Math.ceil(lx / along);
-      const seg = lx / nx;
-      for (let i = 0; i < nx; i++)
-        b.box(nx > 1 ? `${name} ${i + 1}` : name, sheet, { x: x0 + i * seg, y: y0, z: z0 }, { x: seg, y: sheet.a, z: lz }, group);
-      if (nx > 1) b.note(`${name}: skivan är skarvad – se till att skarven hamnar över ett stöd.`);
-      return { thickness: sheet.a, kind: "sheet" };
-    }
+  const sheets = opts.preferSheet !== false
+    ? avail(b.ws, "sheet").filter((m) => m.a >= (opts.minSheet ?? 9)).sort((x, y) => x.a - y.a)
+    : [];
+  for (const sheet of sheets) {
+    // Skivan måste täcka hela djupet (lz) i en bit – annars blir det bara remsor
+    const along = lz <= sheet.stockWidth ? sheet.stockLength : lz <= sheet.stockLength && lx <= sheet.stockWidth ? sheet.stockWidth : 0;
+    if (!along) continue;
+    const nx = Math.ceil(lx / along);
+    const seg = lx / nx;
+    for (let i = 0; i < nx; i++)
+      b.box(nx > 1 ? `${name} ${i + 1}` : name, sheet, { x: x0 + i * seg, y: y0, z: z0 }, { x: seg, y: sheet.a, z: lz }, group);
+    if (nx > 1) b.note(`${name}: skivan är skarvad – se till att skarven hamnar över ett stöd.`);
+    return { thickness: sheet.a, kind: "sheet" };
   }
   const board = pickBoard(b.ws);
   const m = board ?? pickFrame(b.ws);
+  const alongZ = opts.along === "z";
+  const across = alongZ ? lx : lz; // bredden som fylls med brädor
+  const long = alongZ ? lz : lx; // brädornas längd
   const w = m.b; // bredsidan uppåt
-  let n = Math.max(1, Math.floor((lz + gap) / (w + gap)));
-  let pieceW = w;
-  let g = n > 1 ? (lz - n * w) / (n - 1) : 0;
-  if (n * w > lz) {
+  let n = Math.max(1, Math.floor((across + gap) / (w + gap)));
+  let g = n > 1 ? (across - n * w) / (n - 1) : 0;
+  if (n * w > across) {
     n = 1;
     g = 0;
   }
   // Om det blir en stor lucka och vi kan klyva – lägg till en klyvd bit
   let ripped = 0;
   if (g > gap * 2.5 && (b.has("bordssag") || b.has("cirkelsag"))) {
-    const rest = lz - n * (w + gap);
+    const rest = across - n * (w + gap);
     if (rest > 30) {
       ripped = Math.round(rest);
       g = gap;
     }
   }
-  const segs = Math.ceil(lx / m.stockLength);
-  const segL = lx / segs;
-  let z = z0;
+  const segs = Math.ceil(long / m.stockLength);
+  const segL = long / segs;
+  const put = (label: string, c: number, s: number, width: number) =>
+    alongZ
+      ? b.box(label, m, { x: x0 + c, y: y0, z: z0 + s * segL }, { x: width, y: m.a, z: segL }, group)
+      : b.box(label, m, { x: x0 + s * segL, y: y0, z: z0 + c }, { x: segL, y: m.a, z: width }, group);
+  let c = 0;
   for (let i = 0; i < n; i++) {
-    for (let s = 0; s < segs; s++)
-      b.box(`${name} – ${board ? "bräda" : "ribba"} ${i + 1}${segs > 1 ? String.fromCharCode(97 + s) : ""}`, m, { x: x0 + s * segL, y: y0, z }, { x: segL, y: m.a, z: pieceW }, group);
-    z += pieceW + g;
+    for (let s = 0; s < segs; s++) put(`${name} – ${board ? "bräda" : "ribba"} ${i + 1}${segs > 1 ? String.fromCharCode(97 + s) : ""}`, c, s, w);
+    c += w + g;
   }
-  if (ripped) {
-    for (let s = 0; s < segs; s++)
-      b.box(`${name} – klyvd bit`, m, { x: x0 + s * segL, y: y0, z }, { x: segL, y: m.a, z: ripped }, group);
-  }
+  if (ripped) for (let s = 0; s < segs; s++) put(`${name} – klyvd bit`, c, s, ripped);
   if (segs > 1) b.note(`${name}: delarna är längre än säljlängden och skarvas – lägg skarvarna över ett stöd.`);
   if (!board) b.note(`${name} görs av ${m.name} med bredsidan upp eftersom inga brädor eller skivor är tillgängliga.`);
   return { thickness: m.a, kind: board ? "board" : "slat" };

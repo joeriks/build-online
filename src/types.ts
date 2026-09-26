@@ -1,3 +1,5 @@
+import type { Finish } from "./finish";
+
 // Alla mått i millimeter. Koordinatsystem: X = bredd (vänster→höger),
 // Y = höjd (golv = 0, uppåt), Z = djup (0 = vägg/baksida, positivt = framåt).
 
@@ -43,7 +45,24 @@ export interface Part {
   endCuts: [number, number];
   /** Monteringsgrupp – kopplas till byggsteg */
   group: string;
+  /** Enhet som hör ihop och kan markeras/flyttas tillsammans, t.ex. "Fack 2" eller "Låda 1" */
+  unit?: string;
+  /** Infästning mot det delen hänger i: 2 skruvar (standard), 4 skruvar eller vinkelbeslag */
+  fastening?: Fastening;
+  /** Ytbehandling för just den här delen (annars gruppens eller hela konstruktionens) */
+  finish?: Finish;
+  /** Hörnfog i ändarna (fingerskarv/gering) */
+  joint?: Joint;
 }
+
+export type Fastening = "skruv2" | "skruv4" | "vinkel";
+
+/**
+ * Hörnfog som ritas i 3D (påverkar inte kapningslistan – delen är lika lång som biten man kapar).
+ * finger: `count` fingrar över höjden, `start` 0/1 = börjar med finger/urtag i nederkant.
+ * miter: 45° gering i båda ändar, `inward` = åt vilket håll (längs tjockleksaxeln) lådans insida ligger.
+ */
+export type Joint = { type: "finger"; count: number; start: 0 | 1 } | { type: "miter"; inward: 1 | -1 };
 
 export interface Step {
   title: string;
@@ -62,7 +81,7 @@ export interface Design {
   title: string;
   prompt: string;
   templateId: string | null;
-  params: Record<string, number | boolean>;
+  params: Record<string, number | boolean | string>;
   parts: Part[];
   steps: Step[];
   hardware: Hardware[];
@@ -71,6 +90,14 @@ export interface Design {
   wall: { width: number; height: number } | null;
   /** Sant om delar ändrats för hand (då genereras inte om automatiskt) */
   edited?: boolean;
+  /** Last på ytor (kg/m²) för hållfasthetsanalysen – annars förslag utifrån projekttyp */
+  loadKgM2?: number;
+  /** Ytbehandling för hela konstruktionen ("*") och per grupp ("g:<grupp>") */
+  finishes?: Record<string, Finish>;
+  /** Detaljskisser (SVG) som visas bland byggstegen */
+  diagrams?: { title: string; svg: string; caption?: string }[];
+  /** Fogguider (id i src/joinery.ts) som hör till projektet */
+  guides?: string[];
 }
 
 export interface Workshop {

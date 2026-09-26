@@ -30,19 +30,97 @@ Mallarna anpassar sig automatiskt:
 | Mall | Exempel |
 | --- | --- |
 | 📚 Hyllsystem mot vägg | "hyllsystem 2,5 m brett och 3 m högt med 7 hyllor" |
+| 🗃️ Hyllsystem av spånskivor | "hyllsystem av spånskivor 18 mm, 2,5 m brett och 2,5 m högt" – "… och reglar 45x45" för gavlar av reglar, eller "stegehylla av spånskivor och reglar" för hela osågade skivor genom stegar |
 | 🐈 Katt-patio | "katt-patio mot huset, 2 x 1,2 m, utan dörr" |
 | 🛠️ Arbetsbänk | "arbetsbänk 1,6 m lång med hylla under" |
 | 🗄️ Byrå med lådor | "byrå med 4 lådor, 80 cm bred och 90 cm hög" |
 | ✏️ Pennställ med låda | "pennställ med låda, 22 cm brett" |
 | 🌱 Odlingslåda | "odlingslåda 1,2 × 0,8 m" |
 | 🪑 Sittbänk | "sittbänk 1,4 m lång" |
+| 🐾 Sittbänk med kattlåda | "sittbänk med box för kattlåda, 1 m lång" – ingång i gaveln, lyftbart sitslock, förvaringsfack |
+| 🐦 Fågelholk | "fågelholk för blåmes" eller "… med 32 mm hål" |
+| 🪵 Vedförråd | "vedförråd 2 m brett och 80 cm djupt" |
+| 🏖️ Sandlåda | "sandlåda 1,5 × 1,5 m med sittkant" |
+| 👟 Skohylla | "skohylla 80 cm bred med 3 nivåer" |
+| 🧰 Förvaringskista | "dynbox/förvaringskista med lock, 90 cm bred" |
+| 🏡 Trädäck / altan | "trädäck 3 x 2 m, 40 cm högt" |
+| ☕ Soffbord | "soffbord 110 × 60 cm med hylla under" |
+| 📦 Låda – stumfog | "enkel låda 40 × 30 cm, 15 cm hög" – lim + skruv/dymlingar, enklast |
+| 🪚 Låda – fals (japansåg + tving) | "falsad låda med japansåg och tving" – två sågsnitt per ände |
+| 🧩 Låda – fingerskarv | "låda med fingerskarvar" – bordssåg med jigg eller japansåg + stämjärn |
+| 🔺 Låda – gering med kilar | "geringslåda med kilar" – kap- & gersåg, tejptricket och kilar i hörnen |
 
 Mått, antal och alternativ kan sedan justeras med reglage.
+
+## Lådor och hörnfogar
+
+De tre lådmallarna visar hur man fogar ihop hörn – med byggsteg som går att följa om man är
+metodisk: förbereda virket, kapa mot stoppkloss, rita fogar med märkmått, såga på avfallssidan,
+provmontera, limma rätt (ändträ två gånger), kontrollera diagonaler och slipa jämnt.
+
+- fogarna ritas i 3D – fingrarna griper in i varandra och geringarna har sneda ändar
+- detaljskisser av hörnet (och bottenspåret) med mått visas bland byggstegen och i utskriften
+- beskrivningen anpassas efter verktygen: fingerskarv med bordssåg + jigg eller för hand med
+  japansåg + stämjärn, gering med kap- & gersåg eller geringslåda
+- botten i spår (bordssåg/överfräs), underifrån eller på lister, och valfritt lock
+
+## Fogguide – japansåg och tving
+
+Fliken **Fogar** beskriver fogar som går att göra med bara en japansåg och en tving (plus lim,
+blyerts, vinkelhake och sandpapper), med skiss, steg för steg, exakt hur tvingen används i varje
+steg och vanliga misstag:
+
+- **Grunderna** – dragslaget, rita med kniv, såga på avfallssidan, bygg en bänkhake och en sågkloss
+  som styr bladet, djupstopp med tejp, slipkloss och provfog
+- **Stumfog med hörnkloss** – enklast, starkare än ren stumfog
+- **Falsfog** – för lådor och skåp, två snitt per ände
+- **Hörnbladning** – för ramar av regel (bänkar, bord, dörrar)
+- **Korsbladning / T-bladning** – när reglar korsar varandra
+- **Gering med kilar** – egen 45°-sågkloss och tejptricket med bara en tving
+
+Projekten länkar till de guider som hör till dem (under fliken Steg).
+
+## Hållfasthet
+
+Fliken **Hållfasthet** räknar ut om konstruktionen bär:
+
+- appen hittar själv vad som vilar på vad (hyllplan på lister, trall på reglar, reglar på bärlinor …)
+  och för lasten nedåt genom konstruktionen
+- varje liggande del kontrolleras för **böjning**, **svikt** (L/200, L/300 för däck och förråd, med
+  krypning – spånskiva kryper mycket) och **skruvinfästning** när en del hänger i skruv
+- stolpar och gavlar kontrolleras för tryck/knäckning, och hela konstruktionen för **tipprisk**
+- välj last (kg/m²) – t.ex. *Böcker 150*, *Sittyta 300*, *Ved/förråd 400* – och se **utnyttjandegrad**
+  per del, hur mycket varje hylla tål i kg och förslag som "minska spannet till ca 580 mm"
+- slå på färgkartan för att se svaga delar i 3D (grönt → rött)
+- **förslag på förstärkning** för varje del som inte håller (eller är nära gränsen): list under
+  fram-/bakkant, tjockare skiva, grövre virke eller högkant, fler skruvar/vinkelbeslag, grövre stolpar
+  eller kortare spann. Varje förslag är provräknat – du ser *före → efter*, merkostnad och antal nya
+  delar – och **Acceptera** lägger in ändringen i modellen, kapnings- och inköpslistan (kan ångras)
+- **Förstärk automatiskt** väljer det billigaste förslaget som räcker för varje svag del
+
+Beräkningen är förenklad (ungefärliga värden för C24/C18, spånskiva, plywood och OSB) och ersätter
+inte en konstruktionsberäkning för bärande konstruktioner som höga altaner.
+
+## Ytbehandling
+
+Fliken **Ytbehandling** gör delarna fina – för hela konstruktionen, en grupp (t.ex. alla hyllplan)
+eller markerade delar (dubbelklicka för en hel enhet):
+
+- **Kanter:** raka, fasade, rundade eller profilerade (2–10 mm) – syns som riktiga fasade/rundade kanter i 3D
+- **Slipning** i steg upp till valt korn (80–240)
+- **Behandling:** olja, vax, bets/lasyr, lack eller färg med kulörval – utseendet ändras i 3D
+- **Kantband** på skivor
+- snabbval som *Rundade kanter + olja*, *Fasat + vit färg*, *Utomhus: lasyr*
+- åtgång och kostnad (liter olja/färg/grundfärg, sandpapper per korn, kantband, fräsar), arbetstid och
+  torktid, egna byggsteg för ytbehandlingen och kantbearbetning i kapningslistan
+- varningar när verktyg saknas (rundning/profil kräver överfräs – annars hyvel/slipkloss) och när
+  behandlingen inte passar (lack/vax utomhus, kemikalier i sandlåda/odlingslåda, spånskivekanter)
 
 ## Fri redigering
 
 - Klicka på en del i 3D-vyn för att ändra namn, material, mått, position, rotation och kapvinklar
-- **Flytta** med dragreglage i 3D, eller piltangenter (10 mm, Shift = 100 mm, PgUp/PgDn i höjd)
+- **Markera hela enheter** – dubbelklicka på en del i 3D (eller välj under *Markera enhet*) för att ta ett helt fack, en gavel, en låda eller ett dörrblad; Shift-klicka för att lägga till/ta bort delar
+- **Flytta** markeringen med dragpilar i 3D, med ΔX/ΔY/ΔZ, eller piltangenter (10 mm, Shift = 100 mm, PgUp/PgDn i höjd)
 - Duplicera, vrid 90°, ta bort, lägg till nya delar
 - Ångra/gör om (Ctrl+Z / Ctrl+Y)
 - Spara projekt i webbläsaren, exportera/importera JSON, spara bild, skriv ut ritning och listor
@@ -71,6 +149,11 @@ Koden i korthet:
 - `src/generators/` – mallarna (parametriska byggen) och `builder.ts` med materialval
 - `src/parse.ts` – tolkar fritext ("2,5 meter bred", "fyra lådor", "mot huset")
 - `src/analysis.ts` – kapningslista, kapoptimering, skivschema och verktygskontroll
+- `src/strength.ts` – hållfasthetsanalys (last, böjning, svikt, infästningar, tipprisk)
+- `src/reinforce.ts` – förslag på förstärkning som provräknas och kan accepteras
+- `src/finish.ts` – ytbehandling: kanter, slipning, olja/vax/lasyr/lack/färg, åtgång och tid
+- `src/generators/boxes.ts` – lådor med stumfog, fals, fingerskarv och gering, byggbeskrivningar och fogskisser
+- `src/joinery.ts` – fogguide för japansåg + tving
 - `src/viewer.ts` – 3D-vyn
 - `src/ai.ts` – AI-generering via Claude
 - `src/main.ts` – gränssnittet
