@@ -46,6 +46,8 @@ export interface Parsed {
   fullBoards: boolean;
   /** Fågelholkens ingångshål (mm) */
   hole: number | null;
+  /** Lådans hörnfog */
+  joinery: "stumfog" | "finger" | "gering" | null;
 }
 
 const MAT_NOUN = String.raw`(?:spånskiv|spånplatt|skiv|bräd|regl|regel|läkt|plank|virke|plywood|osb|trall)\p{L}*`;
@@ -127,12 +129,15 @@ export function parsePrompt(text: string): Parsed {
 
   const fullBoards = /hela skivor|osågade skivor|genomgående hyll|stegehyll|stegar/.test(raw);
 
-  return { template, dims, count, againstWall, door, studs, fullBoards, hole };
+  // Lådor: vilken hörnfog
+  const joinery = /fingerskarv|fingertapp|fingerfog|finger/.test(raw) ? "finger" : /gering|kilar/.test(raw) ? "gering" : /stumfog|skruvad|dymling/.test(raw) ? "stumfog" : null;
+
+  return { template, dims, count, againstWall, door, studs, fullBoards, hole, joinery };
 }
 
 /** Översätt tolkningen till mallens parametrar. */
-export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, number | boolean> {
-  const out: Record<string, number | boolean> = {};
+export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, number | boolean | string> {
+  const out: Record<string, number | boolean | string> = {};
   for (const p of t.params) out[p.key] = p.default;
   const d = parsed.dims;
   const set = (key: string, v: number | undefined) => {
@@ -154,6 +159,7 @@ export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, nu
   // "hela skivor", "genomgående hyllplan", "stegehylla" → hyllplan av hela skivor genom stegar
   if ("fullBoards" in out && parsed.fullBoards) out.fullBoards = true;
   if (parsed.hole != null) set("hole", parsed.hole);
+  if (parsed.joinery && "joinery" in out) out.joinery = parsed.joinery;
   // Hyllsystem: fler hyllplan om det är högt och antal inte angetts
   if (t.id === "shelf" && parsed.count == null) out.shelves = Math.max(2, Math.round(+out.height / 380));
   return out;

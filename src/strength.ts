@@ -235,9 +235,14 @@ export function analyzeStrength(design: Design, ws: Workshop): StrengthReport {
         contacts.push({ Q, side: false, face: "under" });
         continue;
       }
-      if (overlap(P, Q, "y") < 10) continue;
+      // Tunna delar (t.ex. en botten) kan sitta i ett spår i en stående vägg
+      const inGrooveY = P.min.y >= Q.min.y - TOL && P.max.y <= Q.max.y + TOL && P.p.dims.y < 30 && !isHorizontal(Q);
+      if (overlap(P, Q, "y") < 10 && !inGrooveY) continue;
       for (const ax of ["x", "z"] as const) {
-        const touch = Math.abs(Q.max[ax] - P.min[ax]) <= TOL || Math.abs(Q.min[ax] - P.max[ax]) <= TOL;
+        const groove = inGrooveY && (
+          (P.min[ax] > Q.min[ax] && P.min[ax] < Q.max[ax] && Q.max[ax] - P.min[ax] <= 15 && P.max[ax] > Q.max[ax]) ||
+          (P.max[ax] < Q.max[ax] && P.max[ax] > Q.min[ax] && P.max[ax] - Q.min[ax] <= 15 && P.min[ax] < Q.min[ax]));
+        const touch = groove || Math.abs(Q.max[ax] - P.min[ax]) <= TOL || Math.abs(Q.min[ax] - P.max[ax]) <= TOL;
         if (!touch || overlap(P, Q, other(ax)) <= 10) continue;
         // Mot änden (kortsidan) bär alltid; mot långsidan bär bara stående delar (skruvad)
         if (ax === L0) contacts.push({ Q, side: true, face: "end" });
@@ -303,7 +308,9 @@ export function analyzeStrength(design: Design, ws: Workshop): StrengthReport {
     const x0 = P.min[L];
 
     const supports = supportsC.map((c) => {
-      const from = c.face === "end" ? (Math.abs(c.Q.max[L] - P.min[L]) <= TOL ? 0 : len) : Math.max(P.min[L], c.Q.min[L]) - x0;
+      // Ändstöd: den ände som ligger närmast stödet (fungerar även för delar i spår)
+      const qc = (c.Q.min[L] + c.Q.max[L]) / 2;
+      const from = c.face === "end" ? (Math.abs(qc - P.min[L]) < Math.abs(qc - P.max[L]) ? 0 : len) : Math.max(P.min[L], c.Q.min[L]) - x0;
       const to = c.face === "end" ? from : Math.min(P.max[L], c.Q.max[L]) - x0;
       return { c: (from + to) / 2, Q: c.Q, side: c.side };
     }).sort((a, b) => a.c - b.c);

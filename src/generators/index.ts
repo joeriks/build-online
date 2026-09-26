@@ -5,16 +5,19 @@ import { bench, raisedBed, workbench } from "./furniture";
 import { dresser, penHolder } from "./cabinet";
 import { sheetShelf } from "./sheetShelf";
 import { birdHouse, catLitterBench, chest, coffeeTable, deck, sandbox, shoeRack, woodShed } from "./more";
+import { simpleBox, type Joinery } from "./boxes";
 
 export interface ParamDef {
   key: string;
   label: string;
-  type: "number" | "bool";
+  type: "number" | "bool" | "select";
+  /** För select: valen */
+  options?: { value: string; label: string }[];
   min?: number;
   max?: number;
   step?: number;
   unit?: string;
-  default: number | boolean;
+  default: number | boolean | string;
 }
 
 export interface Template {
@@ -153,6 +156,7 @@ export const TEMPLATES: Template[] = [
       { key: "lowerShelf", label: "Hylla under", type: "bool", default: true }],
     build: coffeeTable,
   },
+  ...boxTemplates(),
   {
     id: "catLitterBench", name: "Sittbänk med kattlåda", icon: "🐾",
     match: /kattlåd|kattoalett|kattsand|kattlådebänk/i,
@@ -183,4 +187,29 @@ export function defaultParams(t: Template): Design["params"] {
 
 export function emptyDesign(prompt = ""): Design {
   return { title: "Nytt projekt", prompt, templateId: null, params: {}, parts: [], steps: [], hardware: [], notes: [], wall: null };
+}
+
+/** Tre varianter av enkla lådor – samma generator, olika hörnfog som standard (kan bytas). */
+function boxTemplates(): Template[] {
+  const variants: { id: string; name: string; icon: string; joinery: Joinery; match: RegExp; example: string }[] = [
+    { id: "boxButt", name: "Låda – stumfog", icon: "📦", joinery: "stumfog", match: /enkel låda|trälåda|stumfog|skruvad låda|låda med dymling/i, example: "Bygg en enkel låda 40 × 30 cm, 15 cm hög, med stumfog" },
+    { id: "boxFinger", name: "Låda – fingerskarv", icon: "🧩", joinery: "finger", match: /fingerskarv|fingertapp|fingerfog/i, example: "Bygg en låda med fingerskarvar, 40 × 30 cm och 15 cm hög" },
+    { id: "boxMiter", name: "Låda – gering med kilar", icon: "🔺", joinery: "gering", match: /geringslåda|gering|låda med kilar/i, example: "Bygg en geringslåda med kilar, 40 × 30 cm och 15 cm hög" },
+  ];
+  return variants.map((v) => ({
+    id: v.id, name: v.name, icon: v.icon, match: v.match, priority: 2, example: v.example,
+    params: [
+      mm("width", "Bredd (yttermått)", 400, 120, 1200, 5), mm("depth", "Djup (yttermått)", 300, 100, 800, 5), mm("height", "Höjd", 150, 50, 500, 5),
+      { key: "joinery", label: "Hörnfog", type: "select", default: v.joinery, options: [
+        { value: "stumfog", label: "Stumfog" }, { value: "finger", label: "Fingerskarv" }, { value: "gering", label: "Gering + kilar" }] },
+      { key: "bottom", label: "Botten", type: "select", default: "auto", options: [
+        { value: "auto", label: "Automatiskt" }, { value: "spar", label: "I spår" }, { value: "under", label: "Underifrån" }, { value: "lister", label: "På lister" }] },
+      { key: "lid", label: "Lock", type: "bool", default: false },
+    ],
+    build: (ws, p, prompt) => {
+      const d = simpleBox(ws, p, prompt);
+      d.templateId = v.id;
+      return d;
+    },
+  }));
 }

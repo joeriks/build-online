@@ -6,6 +6,56 @@ import type { Design, Material, Part, Vec3 } from "./types";
 import { bounds } from "./analysis";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { effectiveFinish, type Finish } from "./finish";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import type { Part as PartT } from "./types";
+
+/**
+ * Geometri för delar med hörnfog. Byggs i ett "kanoniskt" system (längd längs X, höjd längs Y,
+ * tjocklek längs Z, i mm) och vrids sedan till delens riktning.
+ */
+function jointGeometry(p: PartT): THREE.BufferGeometry | null {
+  const j = p.joint;
+  if (!j) return null;
+  const alongX = p.dims.x >= p.dims.z;
+  const L = alongX ? p.dims.x : p.dims.z;
+  const T = alongX ? p.dims.z : p.dims.x;
+  const H = p.dims.y;
+  if (L < 3 * T) return null;
+  let geo: THREE.BufferGeometry;
+  if (j.type === "finger") {
+    const n = Math.max(1, j.count);
+    const parts: THREE.BufferGeometry[] = [new THREE.BoxGeometry(L - 2 * T, H, T)];
+    for (const e of [-1, 1])
+      for (let i = 0; i < n; i++) {
+        if ((i + j.start) % 2) continue;
+        const g = new THREE.BoxGeometry(T, H / n, T);
+        g.translate(e * (L / 2 - T / 2), -H / 2 + (i + 0.5) * (H / n), 0);
+        parts.push(g);
+      }
+    geo = mergeGeometries(parts)!;
+    parts.forEach((g) => g.dispose());
+  } else {
+    // Trapets: yttersidan full längd, insidan kortare med 2×tjockleken
+    const inwardCanon = alongX ? j.inward : -j.inward; // vridning 90° runt Y byter tecken
+    const yIn = -inwardCanon * (T / 2); // ExtrudeGeometry: form-y blir -Z efter vridningen nedan
+    const yOut = -yIn;
+    const shape = new THREE.Shape();
+    shape.moveTo(-L / 2, yOut);
+    shape.lineTo(L / 2, yOut);
+    shape.lineTo(L / 2 - T, yIn);
+    shape.lineTo(-L / 2 + T, yIn);
+    shape.closePath();
+    geo = new THREE.ExtrudeGeometry(shape, { depth: H, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, -H / 2, 0);
+    // ExtrudeGeometry har uv i mm – skala så texturen hamnar rätt
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 600, uv.getY(i) / 600);
+  }
+  if (!alongX) geo.rotateY(-Math.PI / 2);
+  geo.scale(0.001, 0.001, 0.001);
+  return geo;
+}
 
 const S = 0.001; // mm → meter i scenen
 
@@ -312,7 +362,7 @@ export class Viewer {
       const w = Math.max(p.dims.x, 0.5) * S, h = Math.max(p.dims.y, 0.5) * S, dd = Math.max(p.dims.z, 0.5) * S;
       // Fasade/rundade kanter: RoundedBoxGeometry med 1 segment ger fas, fler segment ger rundning
       const r = fin && fin.edge !== "rak" && fin.edgeSize > 0 ? Math.min(fin.edgeSize, Math.min(p.dims.x, p.dims.y, p.dims.z) / 2 - 0.2) * S : 0;
-      const geo = r > 0.0004 ? new RoundedBoxGeometry(w, h, dd, fin!.edge === "fas" ? 1 : fin!.edge === "profil" ? 2 : 4, r) : new THREE.BoxGeometry(w, h, dd);
+      const geo = jointGeometry(p) ?? (r > 0.0004 ? new RoundedBoxGeometry(w, h, dd, fin!.edge === "fas" ? 1 : fin!.edge === "profil" ? 2 : 4, r) : new THREE.BoxGeometry(w, h, dd));
       const material = this.heat ? this.heatMaterial(this.heat.get(p.id), mat) : fin && fin.coating !== "ingen" ? this.finishedMaterial(mat, fin) : this.material(mat);
       if (mat && mat.kind !== "mesh" && material.map) {
         // skala texturen så ådringen följer delens längd ungefär

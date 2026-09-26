@@ -400,3 +400,43 @@ describe("ytbehandling", () => {
     expect(cutList(d, ws).some((r) => r.edge === "rundad 6")).toBe(true);
   });
 });
+
+describe("lådor med olika hörnfogar", () => {
+  const ws = () => defaultWorkshop();
+  it("känns igen och byggs med rätt fog", () => {
+    expect(parsePrompt("låda med fingerskarvar 40 x 30 cm").template?.id).toBe("boxFinger");
+    expect(parsePrompt("en geringslåda med kilar").template?.id).toBe("boxMiter");
+    expect(parsePrompt("enkel låda med stumfog").template?.id).toBe("boxButt");
+  });
+  it("väggarnas längder följer fogen", () => {
+    for (const id of ["boxButt", "boxFinger", "boxMiter"]) {
+      const t = TEMPLATES.find((x) => x.id === id)!;
+      const w = ws();
+      const d = t.build(w, { ...paramsFromParsed(t, parsePrompt(t.example)), width: 400, depth: 300, height: 150 }, "");
+      const gavel = d.parts.find((p) => p.name === "Gavel V")!;
+      const thick = Math.min(gavel.dims.x, gavel.dims.z);
+      const len = Math.max(gavel.dims.x, gavel.dims.z);
+      if (id === "boxButt") expect(len).toBeCloseTo(300 - 2 * thick, 0);
+      else expect(len).toBe(300);
+      if (id === "boxFinger") {
+        expect(gavel.joint?.type).toBe("finger");
+        expect((gavel.joint as { count: number }).count % 2).toBe(1);
+      }
+      if (id === "boxMiter") {
+        expect(gavel.endCuts).toEqual([45, 45]);
+        expect(d.parts.some((p) => p.name.startsWith("Kil"))).toBe(true);
+      }
+      expect(d.steps.length).toBeGreaterThanOrEqual(6);
+      expect(d.diagrams?.length).toBeGreaterThan(0);
+      expect(checkDesign(d, w).filter((x) => x.level === "error")).toEqual([]);
+    }
+  });
+  it("botten i spår kräver bordssåg eller överfräs", () => {
+    const t = TEMPLATES.find((x) => x.id === "boxMiter")!;
+    const w = ws();
+    w.tools.forEach((x) => (x.available = ["handsag", "kapgersag"].includes(x.id)));
+    const d = t.build(w, { ...paramsFromParsed(t, parsePrompt(t.example)), bottom: "spar" }, "");
+    expect(d.parts.some((p) => p.name.includes("på lister"))).toBe(true);
+    expect(d.notes.some((n) => n.includes("Spår för botten kräver"))).toBe(true);
+  });
+});

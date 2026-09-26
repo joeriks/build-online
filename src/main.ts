@@ -344,7 +344,10 @@ function renderBuild() {
     </details>`}`;
 }
 
-function paramHtml(p: Template["params"][number], v: number | boolean | undefined) {
+function paramHtml(p: Template["params"][number], v: number | boolean | string | undefined) {
+  if (p.type === "select")
+    return `<div class="param"><div class="head"><span>${esc(p.label)}</span></div><div class="actions" style="margin-top:4px">${(p.options ?? [])
+      .map((o) => `<button class="chip ${String(v ?? p.default) === o.value ? "on" : ""}" data-param-select="${p.key}" data-value="${esc(o.value)}">${esc(o.label)}</button>`).join("")}</div></div>`;
   if (p.type === "bool")
     return `<label class="switch"><input type="checkbox" data-param="${p.key}" ${v ? "checked" : ""}/> ${esc(p.label)}</label>`;
   const val = Number(v ?? p.default);
@@ -355,6 +358,14 @@ function paramHtml(p: Template["params"][number], v: number | boolean | undefine
 const buildEl = body("build");
 buildEl.addEventListener("click", (e) => {
   const tgt = e.target as HTMLElement;
+  const sel = tgt.closest<HTMLElement>("[data-param-select]");
+  if (sel) {
+    const t = templateById(state.design.templateId);
+    if (!t) return;
+    const params = { ...state.design.params, [sel.dataset.paramSelect!]: sel.dataset.value! };
+    commit(() => regenerate(t, params, state.design.prompt));
+    return;
+  }
   if (tgt.closest("#go")) runPrompt();
   else if (tgt.closest("#ai-go")) runAi();
   else if (tgt.closest("#regen")) {
@@ -949,7 +960,8 @@ function renderSteps() {
   el.innerHTML = steps.length
     ? `<p class="small muted" style="margin-top:0">Klicka på ett steg för att se hur konstruktionen växer fram.</p>
       <ol class="steps-list">${steps.map((s, i) => `<li data-step="${i}" class="${i === stepIdx ? "active" : ""}"><div class="t">${esc(s.title)}</div><div class="small">${esc(s.text)}</div></li>`).join("")}${(finSummary?.steps ?? []).map((s) => `<li class="fin-step"><div class="t">${esc(s.title)} <span class="tag fin">ytbehandling</span></div><div class="small">${esc(s.text)}</div></li>`).join("")}</ol>
-      <button class="btn small" data-step="-1">Visa allt</button>`
+      <button class="btn small" data-step="-1">Visa allt</button>
+      ${(state.design.diagrams ?? []).map((dg) => `<h3>${esc(dg.title)}</h3><div class="diagram-card">${dg.svg}${dg.caption ? `<p class="small muted">${esc(dg.caption)}</p>` : ""}</div>`).join("")}`
     : `<p class="muted">Inga byggsteg.</p>`;
 }
 body("steps").addEventListener("click", (e) => {
@@ -1410,6 +1422,7 @@ function printView() {
     ${rows.map((r) => `<tr><td>${esc(r.materialName)}</td><td class="r">${r.qty}</td><td class="r">${r.kind === "linear" ? fmt(r.length) : `${fmt(r.length)}×${fmt(r.width)}`}</td><td>${r.rip ? `klyv ${r.section.join("×")} ` : ""}${r.endCuts.some((a) => a) ? r.endCuts.join("/") + "° " : ""}${r.edge ? `kant ${esc(r.edge)} mm` : ""}</td><td>${esc(r.names.join(", "))}</td></tr>`).join("")}</table>
     <h2>Inköp</h2><ul>${buy.map((p) => `<li>${p.qty} × ${esc(p.material.name)} (${esc(p.unitLabel)})</li>`).join("")}${d.hardware.map((h) => `<li>${h.qty} ${esc(h.unit)} ${esc(h.name)}</li>`).join("")}</ul>
     ${finSummary?.items.length ? `<h2>Ytbehandling</h2><ul>${finSummary.items.map((it) => `<li>${it.qty} ${esc(it.unit)} ${esc(it.name)}</li>`).join("")}</ul>` : ""}
+    ${(d.diagrams ?? []).map((dg) => `<h2>${esc(dg.title)}</h2>${dg.svg}${dg.caption ? `<p>${esc(dg.caption)}</p>` : ""}`).join("")}
     <h2>Byggsteg</h2><ol>${[...d.steps, ...(finSummary?.steps ?? [])].map((s) => `<li><strong>${esc(s.title)}</strong> – ${esc(s.text)}</li>`).join("")}</ol>
     ${d.notes.length ? `<h2>Att tänka på</h2><ul>${d.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
   document.body.appendChild(div);
