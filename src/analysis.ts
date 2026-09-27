@@ -1,5 +1,6 @@
 import type { Design, Material, Part, Workshop } from "./types";
 import { hasTool } from "./defaults";
+import { effectiveFinish } from "./finish";
 
 export type Level = "error" | "warn" | "info";
 export interface Warning {
@@ -40,6 +41,8 @@ export interface CutRow {
   section: [number, number];
   endCuts: [number, number];
   rip: boolean;
+  /** Kantbearbetning, t.ex. "rundad 6" (tom om raka kanter) */
+  edge: string;
   qty: number;
   names: string[];
   partIds: string[];
@@ -53,12 +56,14 @@ export function cutList(design: Design, ws: Workshop): CutRow[] {
     const s = partShape(p, mat);
     const cuts = [...p.endCuts].map((a) => Math.round(Math.abs(a))).sort((a, b) => a - b) as [number, number];
     const width = mat.kind === "linear" ? 0 : s.section[1];
-    const key = [mat.id, s.length, width, s.section.join("x"), cuts.join("/"), s.rip].join("|");
+    const f = mat.kind === "mesh" ? null : effectiveFinish(design, p);
+    const edge = f && f.edge !== "rak" && f.edgeSize > 0 ? `${f.edge} ${f.edgeSize}` : "";
+    const key = [mat.id, s.length, width, s.section.join("x"), cuts.join("/"), s.rip, edge].join("|");
     let row = rows.get(key);
     if (!row) {
       row = {
         materialId: mat.id, materialName: mat.name, kind: mat.kind, length: s.length, width,
-        section: s.section, endCuts: cuts, rip: s.rip, qty: 0, names: [], partIds: [],
+        section: s.section, endCuts: cuts, rip: s.rip, edge, qty: 0, names: [], partIds: [],
       };
       rows.set(key, row);
     }

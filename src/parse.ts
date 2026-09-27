@@ -40,17 +40,38 @@ export interface Parsed {
   count: number | null;
   againstWall: boolean | null;
   door: boolean | null;
+  /** Texten nämner reglar */
+  studs: boolean;
+  /** Texten vill ha hela skivor som hyllplan genom stegar */
+  fullBoards: boolean;
+  /** Fågelholkens ingångshål (mm) */
+  hole: number | null;
+  /** Lådans hörnfog */
+  joinery: "stumfog" | "fals" | "finger" | "gering" | null;
 }
 
+const MAT_NOUN = String.raw`(?:spånskiv|spånplatt|skiv|bräd|regl|regel|läkt|plank|virke|plywood|osb|trall)\p{L}*`;
+// "50 cm breda och 2,5 m långa spånskivor", "18 mm tjocka skivor"
+const MAT_DESC_BEFORE = new RegExp(String.raw`(?:${NUM}\s*${UNIT}\s*(?:breda|långa|tjocka|höga|djupa)\s*(?:,|och)?\s*)+${MAT_NOUN}`, "gu");
+// "reglar 45x45 mm", "spånskivor 18 mm", "plywood 12 mm"
+// (bara tvärsnitt "45x45" eller tjocklek i mm – "spånskivor 2,5 m brett" ska vara kvar)
+const MAT_DESC_AFTER = new RegExp(String.raw`${MAT_NOUN}\s*(?:på|om|i)?\s*(?:${NUM}(?:\s*[x×*]\s*${NUM})+\s*(?:mm)?|${NUM}\s*mm)(?!\s*(?:bred|hög|djup|lång))`, "gu");
+// "45x45 mm reglar"
+const MAT_SIZE_BEFORE = new RegExp(String.raw`${NUM}(?:\s*[x×*]\s*${NUM})+\s*${UNIT}\s*${MAT_NOUN}`, "gu");
+
 export function parsePrompt(text: string): Parsed {
-  const s = text.toLowerCase().replace(/\s+/g, " ");
-  // Mall: den vars nyckelord förekommer tidigast i texten
+  const raw = text.toLowerCase().replace(/\s+/g, " ");
+  // Mått som beskriver materialet ska inte tolkas som konstruktionens mått
+  const s = raw.replace(MAT_DESC_BEFORE, " ").replace(MAT_SIZE_BEFORE, " ").replace(MAT_DESC_AFTER, " ");
+  // Mall: högst prioritet, därefter den vars nyckelord förekommer tidigast i texten
   let template: Template | null = null;
-  let best = Infinity;
+  let best = { prio: -Infinity, index: Infinity };
   for (const t of TEMPLATES) {
-    const m = t.match.exec(s);
-    if (m && m.index < best) {
-      best = m.index;
+    const m = t.match.exec(raw);
+    if (!m) continue;
+    const prio = t.priority ?? 0;
+    if (prio > best.prio || (prio === best.prio && m.index < best.index)) {
+      best = { prio, index: m.index };
       template = t;
     }
   }
@@ -96,12 +117,27 @@ export function parsePrompt(text: string): Parsed {
   if (/utan dörr/.test(s)) door = false;
   else if (/dörr/.test(s)) door = true;
 
-  return { template, dims, count, againstWall, door };
+  const studs = /regel|reglar|regelvirke|45\s*[x×]\s*45/.test(raw);
+
+  // Fågelholk: "32 mm hål", "hål på 28 mm", eller fågelart
+  let hole: number | null = null;
+  const h1 = /(\d+)\s*mm\s*(?:stort\s*)?(?:ingångs|flyg|in)?hål/.exec(raw) ?? /hål\S*\s*(?:på|om|:)?\s*(?:ø\s*)?(\d+)\s*mm/.exec(raw);
+  if (h1) hole = parseInt(h1[1]);
+  else if (/blåmes|entita|tofsmes/.test(raw)) hole = 28;
+  else if (/talgoxe|flugsnappare|pilfink|gråsparv/.test(raw)) hole = 32;
+  else if (/stare/.test(raw)) hole = 45;
+
+  const fullBoards = /hela skivor|osågade skivor|genomgående hyll|stegehyll|stegar/.test(raw);
+
+  // Lådor: vilken hörnfog
+  const joinery = /fingerskarv|fingertapp|fingerfog|finger/.test(raw) ? "finger" : /gering|kilar/.test(raw) ? "gering" : /fals/.test(raw) ? "fals" : /stumfog|skruvad|dymling/.test(raw) ? "stumfog" : null;
+
+  return { template, dims, count, againstWall, door, studs, fullBoards, hole, joinery };
 }
 
 /** Översätt tolkningen till mallens parametrar. */
-export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, number | boolean> {
-  const out: Record<string, number | boolean> = {};
+export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, number | boolean | string> {
+  const out: Record<string, number | boolean | string> = {};
   for (const p of t.params) out[p.key] = p.default;
   const d = parsed.dims;
   const set = (key: string, v: number | undefined) => {
@@ -113,11 +149,17 @@ export function paramsFromParsed(t: Template, parsed: Parsed): Record<string, nu
   set("height", d.height);
   set("depth", d.depth);
   if (parsed.count != null) {
-    const key = t.params.find((p) => ["shelves", "drawers"].includes(p.key))?.key;
+    const key = t.params.find((p) => ["shelves", "drawers", "levels"].includes(p.key))?.key;
     if (key) set(key, parsed.count);
   }
   if (parsed.againstWall != null && "againstWall" in out) out.againstWall = parsed.againstWall;
   if (parsed.door != null && "door" in out) out.door = parsed.door;
+  // "spånskivor och reglar" → gavlar av reglar
+  if ("studFrame" in out && parsed.studs) out.studFrame = true;
+  // "hela skivor", "genomgående hyllplan", "stegehylla" → hyllplan av hela skivor genom stegar
+  if ("fullBoards" in out && parsed.fullBoards) out.fullBoards = true;
+  if (parsed.hole != null) set("hole", parsed.hole);
+  if (parsed.joinery && "joinery" in out) out.joinery = parsed.joinery;
   // Hyllsystem: fler hyllplan om det är högt och antal inte angetts
   if (t.id === "shelf" && parsed.count == null) out.shelves = Math.max(2, Math.round(+out.height / 380));
   return out;

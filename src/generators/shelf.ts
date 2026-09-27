@@ -15,6 +15,7 @@ export function shelf(ws: Workshop, p: Design["params"], prompt: string): Design
 
   // Gavlar ("stegar"): en bakre och en främre stolpe per gavel
   for (const [i, x] of xs.entries()) {
+    b.unit = `Gavel ${i + 1}`;
     b.post(`Stolpe bak ${i + 1}`, m, { x, y: 0, z: 0 }, H, "stolpar", "z");
     b.post(`Stolpe fram ${i + 1}`, m, { x, y: 0, z: D - m.b }, H, "stolpar", "z");
   }
@@ -26,6 +27,7 @@ export function shelf(ws: Workshop, p: Design["params"], prompt: string): Design
 
   let shelfCount = 0, cleatCount = 0;
   for (let bay = 0; bay < xs.length - 1; bay++) {
+    b.unit = `Fack ${bay + 1}`;
     const x0 = xs[bay] + m.a, x1 = xs[bay + 1];
     const span = x1 - x0;
     for (const [li, yTop] of levels.entries()) {
@@ -41,6 +43,7 @@ export function shelf(ws: Workshop, p: Design["params"], prompt: string): Design
     }
   }
 
+  b.unit = null;
   b.hw("Träskruv 5×80 (list → stolpe)", cleatCount * 2);
   b.hw("Träskruv 4×40 (hyllplan)", shelfCount * 6);
   b.hw("Vinkeljärn / väggbeslag", xs.length * 2);

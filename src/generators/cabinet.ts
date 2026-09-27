@@ -21,7 +21,7 @@ function drawerBox(b: Builder, label: string, mat: Material, t: number, bottom: 
  * Tjocklek för panelmaterialet. Grovt virke klyvs tunnare om bordssåg/cirkelsåg finns,
  * annars används virkets tjocklek som den är.
  */
-function panelThickness(b: Builder, mat: Material, target: number): number {
+export function panelThickness(b: Builder, mat: Material, target: number): number {
   if (mat.kind !== "linear" || mat.a <= target + 8) return mat.a;
   if (b.has("bordssag") || b.has("cirkelsag")) {
     b.note(`${mat.name} klyvs till ${target} mm tjocka remsor på ${b.has("bordssag") ? "bordssågen" : "cirkelsågen"} och limmas till paneler.`);
@@ -62,8 +62,10 @@ export function dresser(ws: Workshop, p: Design["params"], prompt: string): Desi
     }
     const bh = Math.max(40, slot - rh - 20);
     const dl = Dc - tb - 20;
-    drawerBox(b, `Låda ${i + 1}`, mat, t, thin, tb, t + 2, sy + rh + 1, Dc - dl, innerW - 4, bh, dl);
-    panel(b, `Lådfront ${i + 1}`, "fronter", mat, { x: 2, y: plinth + i * frontH + 1.5, z: Dc }, { x: W - 4, y: frontH - 3, z: t });
+    b.inUnit(`Låda ${i + 1}`, () => {
+      drawerBox(b, `Låda ${i + 1}`, mat, t, thin, tb, t + 2, sy + rh + 1, Dc - dl, innerW - 4, bh, dl);
+      panel(b, `Lådfront ${i + 1}`, "fronter", mat, { x: 2, y: plinth + i * frontH + 1.5, z: Dc }, { x: W - 4, y: frontH - 3, z: t });
+    });
   }
 
   b.hw("Träskruv 4×40", n * 12 + 24);
@@ -111,8 +113,10 @@ export function penHolder(ws: Workshop, p: Design["params"], prompt: string): De
   const dw = iw - 3, dd = D - t - 5;
   const bh = dh - 4;
   const front = mat;
-  drawerBox(b, "Låda", mat, t, bottomMat, bt, t + 1.5, t + 1, t + 5, dw, bh, dd - t);
-  panel(b, "Lådfront", "lådor", front, { x: t + 1.5, y: t + 1, z: D - t }, { x: dw, y: bh, z: t });
+  b.inUnit("Låda", () => {
+    drawerBox(b, "Låda", mat, t, bottomMat, bt, t + 1.5, t + 1, t + 5, dw, bh, dd - t);
+    panel(b, "Lådfront", "lådor", front, { x: t + 1.5, y: t + 1, z: D - t }, { x: dw, y: bh, z: t });
+  });
 
   b.hw("Trälim", 1, "flaska");
   b.hw("Dyckert/spik 1,6×30 eller skruv 3×30", 24);
