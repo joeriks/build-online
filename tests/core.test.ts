@@ -458,6 +458,8 @@ describe("fogguide", () => {
     expect(parsePrompt("falsad låda med japansåg och tving").template?.id).toBe("boxRabbet");
     const d = t.build(defaultWorkshop(), { ...paramsFromParsed(t, parsePrompt(t.example)), width: 400, depth: 300, height: 150 }, "");
     expect(d.guides).toContain("fals");
+    const front = d.parts.find((p) => p.name.startsWith("Framsida"))!;
+    expect(front.joint).toMatchObject({ type: "rabbet", inward: -1 });
     for (const id of d.guides ?? []) expect(guideById(id)).toBeTruthy();
     const gavel = d.parts.find((p) => p.name === "Gavel V")!;
     const tt = gavel.dims.x;

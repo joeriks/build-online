@@ -34,6 +34,19 @@ function jointGeometry(p: PartT): THREE.BufferGeometry | null {
       }
     geo = mergeGeometries(parts)!;
     parts.forEach((g) => g.dispose());
+  } else if (j.type === "rabbet") {
+    // Fals: mittdelen har full tjocklek, ändarna är tunnare (urtaget ligger på insidan)
+    const inwardCanon = alongX ? j.inward : -j.inward; // vridning 90° runt Y byter tecken
+    const w = Math.min(j.width, L / 3), dep = Math.min(j.depth, T - 1);
+    const parts: THREE.BufferGeometry[] = [new THREE.BoxGeometry(L - 2 * w, H, T)];
+    for (const e of [-1, 1]) {
+      const g = new THREE.BoxGeometry(w, H, T - dep);
+      // tunna änden sitter mot yttersidan, dvs bort från insidan
+      g.translate(e * (L / 2 - w / 2), 0, -inwardCanon * (dep / 2));
+      parts.push(g);
+    }
+    geo = mergeGeometries(parts)!;
+    parts.forEach((g) => g.dispose());
   } else {
     // Trapets: yttersidan full längd, insidan kortare med 2×tjockleken
     const inwardCanon = alongX ? j.inward : -j.inward; // vridning 90° runt Y byter tecken

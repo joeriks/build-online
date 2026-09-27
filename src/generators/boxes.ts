@@ -145,8 +145,9 @@ export function simpleBox(ws: Workshop, p: Design["params"], prompt: string): De
   if (joinery === "fals") {
     b.unit = "Låda";
     // Långsidorna har en fals i varje ände där gaveln sitter; gaveln går in r mm i långsidan
-    panel(b, "Framsida (falsad)", "långsidor", mat, { x: 0, y: wallY, z: D - t }, { x: W, y: wallH, z: t });
-    panel(b, "Baksida (falsad)", "långsidor", mat, { x: 0, y: wallY, z: 0 }, { x: W, y: wallH, z: t });
+    const rab = (inward: 1 | -1) => ({ joint: { type: "rabbet" as const, width: t, depth: r, inward } });
+    panel(b, "Framsida (falsad)", "långsidor", mat, { x: 0, y: wallY, z: D - t }, { x: W, y: wallH, z: t }, rab(-1));
+    panel(b, "Baksida (falsad)", "långsidor", mat, { x: 0, y: wallY, z: 0 }, { x: W, y: wallH, z: t }, rab(1));
     panel(b, "Gavel V", "gavlar", mat, { x: 0, y: wallY, z: t - r }, { x: t, y: wallH, z: D - 2 * t + 2 * r });
     panel(b, "Gavel H", "gavlar", mat, { x: W - t, y: wallY, z: t - r }, { x: t, y: wallH, z: D - 2 * t + 2 * r });
     b.note(`Fals: ${t} mm bred och ${r} mm djup i varje ände av fram- och baksidan. Gavlarna blir ${D - 2 * t + 2 * r} mm långa.`);

@@ -61,8 +61,13 @@ export type Fastening = "skruv2" | "skruv4" | "vinkel";
  * Hörnfog som ritas i 3D (påverkar inte kapningslistan – delen är lika lång som biten man kapar).
  * finger: `count` fingrar över höjden, `start` 0/1 = börjar med finger/urtag i nederkant.
  * miter: 45° gering i båda ändar, `inward` = åt vilket håll (längs tjockleksaxeln) lådans insida ligger.
+ * rabbet: fals (L-format urtag) på insidan i båda ändar.
  */
-export type Joint = { type: "finger"; count: number; start: 0 | 1 } | { type: "miter"; inward: 1 | -1 };
+export type Joint =
+  | { type: "finger"; count: number; start: 0 | 1 }
+  | { type: "miter"; inward: 1 | -1 }
+  /** Fals i båda ändar på insidan: `width` längs delen, `depth` in i tjockleken */
+  | { type: "rabbet"; width: number; depth: number; inward: 1 | -1 };
 
 export interface Step {
   title: string;

@@ -220,9 +220,9 @@ export function pickPanel(ws: Workshop, maxThick = 25): Material {
  * En plan panel (min + storlek, tunnaste axeln = tjocklek). Skiva blir en del;
  * virke blir remsor som limmas kant i kant (sista remsan klyvs vid behov).
  */
-export function panel(b: Builder, name: string, group: string, mat: Material, min: Vec3, size: Vec3): void {
+export function panel(b: Builder, name: string, group: string, mat: Material, min: Vec3, size: Vec3, extra: Partial<Part> = {}): void {
   if (mat.kind !== "linear") {
-    b.box(name, mat, min, size, group);
+    b.box(name, mat, min, size, group, extra);
     return;
   }
   const axes = (["x", "y", "z"] as const).slice().sort((p, q) => size[p] - size[q]);
@@ -234,7 +234,7 @@ export function panel(b: Builder, name: string, group: string, mat: Material, mi
     const w = total / n; // jämnt breda remsor istället för en smal sista sticka
     const s = { ...size, [wAx]: w } as Vec3;
     const o = { ...min, [wAx]: min[wAx] + pos } as Vec3;
-    b.box(n > 1 ? `${name} (remsa ${i + 1})` : name, mat, o, s, group);
+    b.box(n > 1 ? `${name} (remsa ${i + 1})` : name, mat, o, s, group, extra);
     pos += w;
   }
   if (n > 1) b.note(`${name} limmas ihop av ${n} remsor ${mat.name} kant i kant.`);
